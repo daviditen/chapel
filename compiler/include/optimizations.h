@@ -54,6 +54,8 @@ void deadVariableElimination(FnSymbol* fn);
 void deadExpressionElimination(FnSymbol* fn);
 void deadCodeElimination(FnSymbol* fn);
 
+void buildSyncAccessFunctionSet(Vec<FnSymbol*>& syncAccessFunctionSet);
+
 void liveVariableAnalysis(FnSymbol* fn,
                           Vec<Symbol*>& locals,
                           Map<Symbol*,int>& localID,

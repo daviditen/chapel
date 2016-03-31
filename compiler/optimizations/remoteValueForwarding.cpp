@@ -29,7 +29,7 @@
 //
 // Compute set of functions that access sync variables.
 //
-static void
+void
 buildSyncAccessFunctionSet(Vec<FnSymbol*>& syncAccessFunctionSet) {
   Vec<FnSymbol*> syncAccessFunctionVec;
 

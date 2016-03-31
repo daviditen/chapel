@@ -24,10 +24,14 @@
 #include "passes.h"
 
 #include "astutil.h"
+#include "bb.h"
 #include "expr.h"
+#include "optimizations.h"
+#include "stlUtil.h"
 #include "stmt.h"
 #include "stringutil.h"
 #include "symbol.h"
+#include "view.h"
 
 //
 // insertLineNumbers() inserts line numbers and filenames into
@@ -216,6 +220,74 @@ static bool isClassMethodCall(CallExpr* call) {
   return false;
 }
 
+const bool canRemoveNilChecks = true;
+
+/* Remove nil checks that are redundant within a given basic block.
+   It does not currently attempt to remove checks that could be proven
+   redundant across multiple basic blocks.
+
+   Walk the statements in each basic block.  If two nil checks are found for
+   the same symbol with no def of that symbol between them then the second
+   check is redundant.
+
+   Any sync or single variable accesses between nil checks will result in
+   rechecking for nil because a parallel construct could have changed the
+   value to nil in an observable way.
+ */
+static void removeNilChecks() {
+  if (!canRemoveNilChecks) return;
+  forv_Vec(FnSymbol, fn, gFnSymbols) {
+    BasicBlock::buildBasicBlocks(fn);
+    Map<Symbol*, Vec<SymExpr*>*> defMap;
+    Map<Symbol*, Vec<SymExpr*>*> useMap;
+    std::vector<BasicBlock*> basicBlocks = *fn->basicBlocks;
+    std::set<Symbol*> nilChecks;
+    Vec<FnSymbol*> syncAccessFnSet;
+
+    buildDefUseMaps(fn, defMap, useMap);
+    buildSyncAccessFunctionSet(syncAccessFnSet);
+
+    unsigned nBlocks = basicBlocks.size();
+    for (unsigned i = 0; i < nBlocks; i++) {
+      BasicBlock* block = basicBlocks[i];
+      for (unsigned j=0; j < block->exprs.size(); j++) {
+        CallExpr* call = toCallExpr(block->exprs[j]);
+        if (call && call->isPrimitive(PRIM_CHECK_NIL)) {
+          Symbol* checkedSym = toSymExpr(call->get(1))->var;
+          if (nilChecks.count(checkedSym) != 0) {
+            call->remove();
+          } else {
+            nilChecks.insert(checkedSym);
+          }
+        } else {
+          std::vector<Expr*> exprs;
+          Expr* stmt = block->exprs[j];
+
+          collectExprs(stmt, exprs);
+          for_vector(Expr, expr, exprs) {
+            if (CallExpr* call = toCallExpr(expr)) {
+              // if this is a call to a function that accesses a sync or
+              // single variable then invalidate all previous nil checks
+              if (FnSymbol* fn = call->isResolved()) {
+                if (syncAccessFnSet.set_in(fn)) {
+                  nilChecks.clear();
+                }
+              }
+            } else if (SymExpr* se = toSymExpr(expr)) {
+              // if this SymExpr is a def then invalidate previous nil check
+              Vec<SymExpr*>* defs = defMap.get(se->var);
+              if (defs && defs->in(se)) {
+                if (nilChecks.count(se->var) != 0) {
+                  nilChecks.erase(se->var);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
 
 // insert nil checks primitives in front of most member accesses
 //
@@ -274,13 +346,16 @@ void insertLineNumbers() {
 
   if (!fNoNilChecks) {
     insertNilChecks();
+    removeNilChecks();
   }
 
   // loop over all primitives that require a line number and filename
   // and pass them an actual line number and filename
   forv_Vec(CallExpr, call, gCallExprs) {
     if (call->primitive && call->primitive->passLineno) {
-      insertLineNumber(call);
+      if (call->inTree()) {
+        insertLineNumber(call);
+      }
     }
   }
 
