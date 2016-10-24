@@ -612,7 +612,7 @@ proc _cast(type t, r: range(?)) where isRangeType(t) {
   /* private */ proc range.alignLow() 
   {
     if this.isAmbiguous() then
-      __primitive("chpl_error", c"alignLow -- Cannot be applied to a range with ambiguous alignment.");
+      halt("alignLow -- Cannot be applied to a range with ambiguous alignment.");
   
     if stridable then _low = this.alignedLow;
     return this;
@@ -623,7 +623,7 @@ proc _cast(type t, r: range(?)) where isRangeType(t) {
   /* private */ proc range.alignHigh()
   {
     if this.isAmbiguous() then
-      __primitive("chpl_error", c"alignHigh -- Cannot be applied to a range with ambiguous alignment.");
+      halt("alignHigh -- Cannot be applied to a range with ambiguous alignment.");
   
     if stridable then _high = this.alignedHigh;
     return this;
@@ -649,7 +649,7 @@ proc _cast(type t, r: range(?)) where isRangeType(t) {
   proc range.indexOrder(i: idxType)
   {
     if this.isAmbiguous() then
-      __primitive("chpl_error", c"indexOrder -- Undefined on a range with ambiguous alignment.");
+      halt("indexOrder -- Undefined on a range with ambiguous alignment.");
   
     if ! member(i) then return (-1):idxType;
     if ! stridable then return i - _low;
@@ -923,12 +923,12 @@ proc _cast(type t, r: range(?)) where isRangeType(t) {
 
     if boundsChecking {
       if step == 0 then
-        __primitive("chpl_error", c"the step argument of the 'by' operator is zero");
+        halt("the step argument of the 'by' operator is zero");
 
       if chpl_need_to_check_step(step, strType) &&
          step > (max(strType):step.type)
       then
-        __primitive("chpl_error", ("the step argument of the 'by' operator is too large and cannot be represented within the range's stride type " + strType:string):c_string);
+        halt("the step argument of the 'by' operator is too large and cannot be represented within the range's stride type " + strType:string);
     }
   }
 
@@ -1062,7 +1062,7 @@ proc _cast(type t, r: range(?)) where isRangeType(t) {
       var st2 = abs(other.stride);
       var (g,x) = chpl__extendedEuclid(st1, st2);
       if g > 1 then
-        __primitive("chpl_error", c"Cannot slice ranges with ambiguous alignments unless their strides are relatively prime.");
+        halt("Cannot slice ranges with ambiguous alignments unless their strides are relatively prime.");
   
       // OK, we can combine these two ranges, but the result is marked as ambiguous.
       ambig = true;
@@ -1242,7 +1242,7 @@ proc _cast(type t, r: range(?)) where isRangeType(t) {
 
   proc chpl_count_help(r, count: integral) {
     if r.isAmbiguous() then
-      __primitive("chpl_error", c"count -- Cannot count off elements from a range which is ambiguously aligned.");
+      halt("count -- Cannot count off elements from a range which is ambiguously aligned.");
 
     type resultType = r.idxType;
     type strType = indexToStrideType(resultType);
@@ -1524,7 +1524,7 @@ proc _cast(type t, r: range(?)) where isRangeType(t) {
       halt("iteration over range that has no first index");
 
     if this.isAmbiguous() then
-      __primitive("chpl_error", c"these -- Attempt to iterate over a range with ambiguous alignment.");
+      halt("these -- Attempt to iterate over a range with ambiguous alignment.");
 
     // This iterator could be split into different cases depending on the
     // stride like the bounded iterators. However, all that gets you is the
@@ -1549,7 +1549,7 @@ proc _cast(type t, r: range(?)) where isRangeType(t) {
       if boundsChecking then checkIfIterWillOverflow();
 
       if this.isAmbiguous() then
-        __primitive("chpl_error", c"these -- Attempt to iterate over a range with ambiguous alignment.");
+        halt("these -- Attempt to iterate over a range with ambiguous alignment.");
 
       // must use first/last since we have no knowledge of stride
       // must check if low > high (something like 10..1) because of the !=
@@ -1612,7 +1612,7 @@ proc _cast(type t, r: range(?)) where isRangeType(t) {
   pragma "no doc"
   iter range.generalIterator() {
     if this.isAmbiguous() then
-      __primitive("chpl_error", c"these -- Attempt to iterate over a range with ambiguous alignment.");
+      halt("these -- Attempt to iterate over a range with ambiguous alignment.");
 
     var i: idxType;
     const start = this.first;
@@ -1639,7 +1639,7 @@ proc _cast(type t, r: range(?)) where isRangeType(t) {
       compilerError("parallel iteration is not supported over unbounded ranges");
     }
     if this.isAmbiguous() {
-      __primitive("chpl_error", c"these -- Attempt to iterate over a range with ambiguous alignment.");
+      halt("these -- Attempt to iterate over a range with ambiguous alignment.");
     }
     if debugChapelRange {
       writeln("*** In range standalone iterator:");
@@ -1688,7 +1688,7 @@ proc _cast(type t, r: range(?)) where isRangeType(t) {
       compilerError("parallel iteration is not supported over unbounded ranges");
 
     if this.isAmbiguous() then
-      __primitive("chpl_error", c"these -- Attempt to iterate over a range with ambiguous alignment.");
+      halt("these -- Attempt to iterate over a range with ambiguous alignment.");
 
     if debugChapelRange then
       writeln("*** In range leader:"); // ", this);
@@ -1782,7 +1782,7 @@ proc _cast(type t, r: range(?)) where isRangeType(t) {
   iter range.these(param tag: iterKind, followThis) where tag == iterKind.follower
   {
     if this.isAmbiguous() then
-      __primitive("chpl_error", c"these -- Attempt to iterate over a range with ambiguous alignment.");
+      halt("these -- Attempt to iterate over a range with ambiguous alignment.");
 
     if boundedType == BoundedRangeType.boundedNone then
       compilerError("iteration over a range with no bounds");
