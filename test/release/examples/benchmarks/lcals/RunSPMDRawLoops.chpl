@@ -442,7 +442,7 @@ module RunSPMDRawLoops {
             loopInit(iloop, stat);
             var output => loop_data.RealArray_1D[0];
             var input => loop_data.RealArray_1D[1];
-            const coefflen = 16;
+            param coefflen = 16;
             const coeff = [3.0, -1.0, -1.0, -1.0,
                            -1.0, 3.0, -1.0, -1.0,
                            -1.0, -1.0, 3.0, -1.0,
@@ -459,7 +459,7 @@ module RunSPMDRawLoops {
               while isamp < num_samples {
                 for i in chunk(0..#len_minus_coeff, nTasks, tid) {
                   var sum = 0.0;
-                  for j in 0..#coefflen {
+                  for param j in 0..coefflen-1 {
                     sum += coeff[j+1]*input[i+j];
                   }
                   output[i] = sum;
