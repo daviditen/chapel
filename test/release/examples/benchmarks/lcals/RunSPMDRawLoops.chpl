@@ -549,9 +549,10 @@ module RunSPMDRawLoops {
                 for i in chunk(0..#len, nTasks, tid) {
                   var s = b[i]*b[i] - 4.0*a[i]*c[i];
                   if s >= 0 {
+                    const tmp = 1.0 / (2.0*a[i]);
                     s = sqrt(s);
-                    x2[i] = (-b[i]+s) / (2.0*a[i]);
-                    x1[i] = (-b[i]-s) / (2.0*a[i]);
+                    x2[i] = (-b[i]+s) * tmp; // / (2.0*a[i]);
+                    x1[i] = (-b[i]-s) * tmp; // / (2.0*a[i]);
                   } else {
                     x2[i] = 0.0;
                     x1[i] = 0.0;
