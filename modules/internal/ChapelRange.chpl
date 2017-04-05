@@ -1251,17 +1251,63 @@ proc _cast(type t, r: range(?)) where isRangeType(t) {
 
     type resultType = r.idxType;
     type strType = indexToStrideType(resultType);
-  
-    if (count == 0) then
+
+    if (count == 0) {
       // Return a degenerate range.
-      return new range(idxType = resultType,
-                       boundedType = BoundedRangeType.bounded,
-                       stridable = r.stridable,
-                       _low = 1,
-                       _high = 0,
-                       _stride = r.stride,
-                       _alignment = 0,
-                       _aligned = false);
+      if r.boundedType == BoundedRangeType.boundedLow {
+        if r.low == min(resultType) {
+          halt("Range index out of bounds");
+        }
+        return new range(idxType = resultType,
+                         boundedType = BoundedRangeType.bounded,
+                         stridable = r.stridable,
+                         _low = r.low,
+                         _high = r.low - 1,
+                         _stride = r.stride,
+                         _alignment = 0,
+                         _aligned = false);
+      } else if r.boundedType == BoundedRangeType.boundedHigh {
+        if r.high == max(resultType) {
+          halt("Range index out of bounds");
+        }
+        return new range(idxType = resultType,
+                         boundedType = BoundedRangeType.bounded,
+                         stridable = r.stridable,
+                         _low = r.high + 1,
+                         _high = r.high,
+                         _stride = r.stride,
+                         _alignment = 0,
+                         _aligned = false);
+      } else {
+        // boundedType == BoundedRangeType.bounded
+        if r.stride > 0 {
+          if r.low == min(resultType) {
+            halt("Range index out of bounds");
+          }
+          return new range(idxType = resultType,
+                           boundedType = BoundedRangeType.bounded,
+                           stridable = r.stridable,
+                           _low = r.low,
+                           _high = r.low-1,
+                           _stride = r.stride,
+                           _alignment = 0,
+                           _aligned = false);
+        } else {
+          if r.high == max(resultType) {
+            halt("Range index out of bounds");
+          }
+          return new range(idxType = resultType,
+                           boundedType = BoundedRangeType.bounded,
+                           stridable = r.stridable,
+                           _low = r.high+1,
+                           _high = r.high,
+                           _stride = r.stride,
+                           _alignment = 0,
+                           _aligned = false);
+
+        }
+      }
+    }
   
     if !r.hasFirst() && count > 0 then
       halt("With a positive count, the range must have a first index.");
