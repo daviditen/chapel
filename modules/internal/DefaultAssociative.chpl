@@ -818,7 +818,7 @@ module DefaultAssociative {
     return _gen_key(__primitive( "object2int", o));
   }
 
-  inline proc chpl__defaultHash(r: ?t) where isRecordType(t) {
+  inline proc chpl__defaultHash(r: ?t) where isRecordType(t) || isTupleType(t) {
     use Reflection;
 
     inline proc chpl__defaultHashCombineRecord(a: uint, b: uint, param i) {
