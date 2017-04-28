@@ -817,7 +817,34 @@ module DefaultAssociative {
   inline proc chpl__defaultHash(o: object): uint {
     return _gen_key(__primitive( "object2int", o));
   }
-  
+
+  inline proc chpl__defaultHash(r: ?t) where isRecordType(t) {
+    use Reflection;
+
+    inline proc chpl__defaultHashCombineRecord(a: uint, b: uint, param i) {
+      return chpl__defaultHashCombine(b, a, i);
+    }
+
+    inline proc chpl__defaultHashCombineRecord(a: uint, b: uint,
+                                               rest...?n, param i=2) {
+      return chpl__defaultHashCombineRecord(chpl__defaultHashCombine(b, a, i),
+                                            (...rest), i+1);
+    }
+
+    param nf = numFields(t);
+    if nf == 0 {
+      return 0:uint;
+    } else if nf == 1 {
+      return chpl__defaultHash(getField(r, 1));
+    } else {
+      var tup: nf*uint;
+      for param i in 1..nf {
+        tup(i) = chpl__defaultHash(getField(r, i));
+      }
+      return chpl__defaultHashCombineRecord((...tup), 2);
+    }
+  }
+
   // Is 'idxType' legal to create a default associative domain with?
   // Currently based on the availability of chpl__defaultHash().
   // Enumerated, opaque, and sparse domains are handled separately.

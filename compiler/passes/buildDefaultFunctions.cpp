@@ -50,7 +50,6 @@ static void build_extern_assignment_function(Type* type);
 static void build_record_assignment_function(AggregateType* ct);
 static void build_record_cast_function(AggregateType* ct);
 static void build_record_copy_function(AggregateType* ct);
-static void build_record_hash_function(AggregateType* ct);
 static void build_record_equality_function(AggregateType* ct);
 static void build_record_inequality_function(AggregateType* ct);
 
@@ -106,7 +105,6 @@ void buildDefaultFunctions() {
           build_record_assignment_function(ct);
           build_record_cast_function(ct);
           build_record_copy_function(ct);
-          build_record_hash_function(ct);
         }
 
         if (isUnion(ct)) {
@@ -1183,46 +1181,6 @@ static void build_record_copy_function(AggregateType* ct) {
   normalize(fn);
 }
 
-
-static void build_record_hash_function(AggregateType *ct) {
-  if (function_exists("chpl__defaultHash", 1, ct))
-    return;
-
-  FnSymbol *fn = new FnSymbol("chpl__defaultHash");
-  fn->addFlag(FLAG_COMPILER_GENERATED);
-  ArgSymbol *arg = new ArgSymbol(INTENT_BLANK, "r", ct);
-  arg->addFlag(FLAG_MARKED_GENERIC);
-  fn->insertFormalAtTail(arg);
-
-  if (ct->fields.length == 0) {
-    fn->insertAtTail(new CallExpr(PRIM_RETURN, new_UIntSymbol(0)));
-    fn->addFlag(FLAG_INLINE);
-  } else {
-    CallExpr *call = NULL;
-    bool first = true;
-    int i = 1;
-    for_fields(field, ct) {
-      if (!field->hasFlag(FLAG_IMPLICIT_ALIAS_FIELD)) {
-        CallExpr *field_access = new CallExpr(field->name, gMethodToken, arg);
-        if (first) {
-          call = new CallExpr("chpl__defaultHash", field_access);
-          first = false;
-        } else {
-          call = new CallExpr("chpl__defaultHashCombine",
-                              new CallExpr("chpl__defaultHash", field_access),
-                              call,
-                              new_IntSymbol(i));
-        }
-      }
-      i++;
-    }
-    fn->insertAtTail(new CallExpr(PRIM_RETURN, call));
-  }
-  DefExpr *def = new DefExpr(fn);
-  ct->symbol->defPoint->insertBefore(def);
-  reset_ast_loc(def, ct->symbol);
-  normalize(fn);
-}
 
 /************************************* | **************************************
 *                                                                             *
