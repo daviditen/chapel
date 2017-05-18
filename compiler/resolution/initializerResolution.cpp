@@ -22,6 +22,7 @@
 #include "astutil.h"
 #include "caches.h"
 #include "callInfo.h"
+#include "driver.h"
 #include "expandVarArgs.h"
 #include "expr.h"
 #include "initializerRules.h"
@@ -35,9 +36,6 @@
 #include "view.h"
 #include "visibleCandidates.h"
 #include "visibleFunctions.h"
-
-static
-void resolveInitializer(CallExpr* call);
 
 static
 void resolveInitCall(CallExpr* call);
@@ -364,7 +362,6 @@ void modAndResolveInitCall (CallExpr* call, AggregateType* typeToNew) {
   }
 }
 
-static
 void resolveInitializer(CallExpr* call) {
   // From resolveExpr() (removed the tryStack stuff)
   callStack.add(call);

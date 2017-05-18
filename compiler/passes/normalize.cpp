@@ -26,6 +26,7 @@
 
 #include "astutil.h"
 #include "build.h"
+#include "driver.h"
 #include "expr.h"
 #include "initializerRules.h"
 #include "stlUtil.h"
@@ -786,7 +787,7 @@ insertUseForExplicitModuleCalls(void) {
       BlockStmt* block = new BlockStmt();
       stmt->insertBefore(block);
       block->insertAtHead(stmt->remove());
-      block->moduleUseAdd(mod);
+      block->useListAdd(mod);
     }
   }
 }
@@ -864,9 +865,6 @@ static void normalizeReturns(FnSymbol* fn) {
       numYields++;
     }
   }
-
-  // If an iterator, then there is at least one nonvoid return-or-yield.
-  INT_ASSERT(isIterator == false || rets.size() > numVoidReturns);
 
   // Check if this function's returns are already normal.
   if (rets.size() == numYields + 1 && theRet == fn->body->body.last()) {
@@ -1113,10 +1111,6 @@ static void call_constructor_for_class(CallExpr* call) {
         // Call chpl__buildDistType for syntactic distributions.
         se->replace(new UnresolvedSymExpr("chpl__buildDistType"));
       } else {
-        if (ct->initializerStyle == DEFINES_INITIALIZER && ct->isGeneric()) {
-          USR_FATAL_CONT(se, "Type constructors are not yet supported for generic types that define initializers.  As a workaround, try relying on type inference");
-        }
-
         // Transform C ( ... ) into _type_construct_C ( ... ) .
         se->replace(new UnresolvedSymExpr(ct->defaultTypeConstructor->name));
       }

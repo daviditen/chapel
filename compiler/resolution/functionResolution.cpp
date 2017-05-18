@@ -354,11 +354,13 @@ resolveUninsertedCall(Type* type, CallExpr* call, bool checkonly) {
   BlockStmt* insideBlock = NULL;
   Expr* beforeExpr = NULL;
 
-  if (type->defaultInitializer) {
-    if (type->defaultInitializer->instantiationPoint)
-      insideBlock = type->defaultInitializer->instantiationPoint;
+  AggregateType* at = toAggregateType(type);
+
+  if (at && at->defaultInitializer) {
+    if (at->defaultInitializer->instantiationPoint)
+      insideBlock = at->defaultInitializer->instantiationPoint;
     else
-      beforeExpr = type->symbol->defPoint;
+      beforeExpr = at->symbol->defPoint;
   } else {
     insideBlock = chpl_gen_main->body;
   }
@@ -764,39 +766,50 @@ protoIteratorClass(FnSymbol* fn) {
     className = astr(className, "_", fn->_this->type->symbol->cname);
 
   ii->iclass = new AggregateType(AGGREGATE_CLASS);
+
   TypeSymbol* cts = new TypeSymbol(astr("_ic_", className), ii->iclass);
+
   cts->addFlag(FLAG_ITERATOR_CLASS);
   cts->addFlag(FLAG_POD);
-  add_root_type(ii->iclass);    // Add super : dtObject.
+
+  ii->iclass->addRootType();
+
   fn->defPoint->insertBefore(new DefExpr(cts));
 
   ii->irecord = new AggregateType(AGGREGATE_RECORD);
+
   TypeSymbol* rts = new TypeSymbol(astr("_ir_", className), ii->irecord);
+
   rts->addFlag(FLAG_ITERATOR_RECORD);
+
   // TODO -- do a better job of deciding if an iterator record is
   // POD or not POD.
   rts->addFlag(FLAG_NOT_POD);
-  if (fn->retTag == RET_REF) // TODO -- handle RET_CONST_REF
+
+  if (fn->retTag == RET_REF) { // TODO -- handle RET_CONST_REF
     rts->addFlag(FLAG_REF_ITERATOR_CLASS);
+  }
+
   fn->defPoint->insertBefore(new DefExpr(rts));
 
-  ii->tag = it_iterator;
-  ii->advance = protoIteratorMethod(ii, "advance", dtVoid);
-  ii->zip1 = protoIteratorMethod(ii, "zip1", dtVoid);
-  ii->zip2 = protoIteratorMethod(ii, "zip2", dtVoid);
-  ii->zip3 = protoIteratorMethod(ii, "zip3", dtVoid);
-  ii->zip4 = protoIteratorMethod(ii, "zip4", dtVoid);
-  ii->hasMore = protoIteratorMethod(ii, "hasMore", dtInt[INT_SIZE_DEFAULT]);
+  ii->tag      = it_iterator;
+  ii->advance  = protoIteratorMethod(ii, "advance",  dtVoid);
+  ii->zip1     = protoIteratorMethod(ii, "zip1",     dtVoid);
+  ii->zip2     = protoIteratorMethod(ii, "zip2",     dtVoid);
+  ii->zip3     = protoIteratorMethod(ii, "zip3",     dtVoid);
+  ii->zip4     = protoIteratorMethod(ii, "zip4",     dtVoid);
+  ii->hasMore  = protoIteratorMethod(ii, "hasMore",  dtInt[INT_SIZE_DEFAULT]);
   ii->getValue = protoIteratorMethod(ii, "getValue", fn->retType);
-  ii->init = protoIteratorMethod(ii, "init", dtVoid);
-  ii->incr = protoIteratorMethod(ii, "incr", dtVoid);
+  ii->init     = protoIteratorMethod(ii, "init",     dtVoid);
+  ii->incr     = protoIteratorMethod(ii, "incr",     dtVoid);
 
   // Save the iterator info in the iterator record.
   // The iterator info is still owned by the iterator function.
-  ii->irecord->iteratorInfo = ii;
+  ii->irecord->iteratorInfo        = ii;
   ii->irecord->scalarPromotionType = fn->retType;
+
   fn->retType = ii->irecord;
-  fn->retTag = RET_VALUE;
+  fn->retTag  = RET_VALUE;
 
   makeRefType(fn->retType);
 
@@ -897,7 +910,7 @@ isTupleContainingAnyReferences(Type* t)
 
 
 static Type*
-getReturnedTupleType(FnSymbol* fn, Type* retType)
+getReturnedTupleType(FnSymbol* fn, AggregateType* retType)
 {
   INT_ASSERT(retType->symbol->hasFlag(FLAG_TUPLE));
 
@@ -937,8 +950,10 @@ resolveSpecifiedReturnType(FnSymbol* fn) {
     // So we make sure returned tuple types capture values here.
     if (retType->symbol->hasFlag(FLAG_TUPLE) &&
         !doNotChangeTupleTypeRefLevel(fn, true)) {
+      AggregateType* tupleType = toAggregateType(retType);
+      INT_ASSERT(tupleType);
 
-      retType = getReturnedTupleType(fn, retType);
+      retType = getReturnedTupleType(fn, tupleType);
       fn->retType = retType;
     } else if (fn->returnsRefOrConstRef()) {
       makeRefType(retType);
@@ -1089,7 +1104,9 @@ resolveFormals(FnSymbol* fn) {
         // Let 'in' intent work similarly to the blank intent.
         IntentTag intent = formal->intent;
         if (intent == INTENT_IN) intent = INTENT_BLANK;
-        Type* newType = computeTupleWithIntent(intent, formal->type);
+        AggregateType* tupleType = toAggregateType(formal->type);
+        INT_ASSERT(tupleType);
+        Type* newType = computeTupleWithIntent(intent, tupleType);
         formal->type = newType;
       }
 
@@ -1846,8 +1863,8 @@ isMoreVisibleInternal(BlockStmt* block, FnSymbol* fn1, FnSymbol* fn2,
   //
   // ensure f2 is not more visible via module uses, and recurse
   //
-  if (block && block->modUses) {
-    for_actuals(expr, block->modUses) {
+  if (block && block->useList) {
+    for_actuals(expr, block->useList) {
       UseStmt* use = toUseStmt(expr);
       INT_ASSERT(use);
       SymExpr* se = toSymExpr(use->src);
@@ -3261,6 +3278,18 @@ FnSymbol* resolveNormalCall(CallExpr* call, bool checkonly) {
 
   resolveDefaultGenericType(call);
 
+  if (call->numActuals() >= 2 && call->get(1)->typeInfo() == dtMethodToken) {
+    if (UnresolvedSymExpr* ures = toUnresolvedSymExpr(call->baseExpr)) {
+      if (!strcmp(ures->unresolved, "init") &&
+          isGenericRecordWithInitializers(call->get(2)->typeInfo())) {
+        // If the first actual is an instance of dtMethodToken and the call is
+        // to "init" of a generic record that defined initializers
+        resolveInitializer(call);
+        return call->resolvedFunction();
+      }
+    }
+  }
+
   CallInfo info(call, checkonly);
 
   // Return early if creating the call info would have been an error.
@@ -3963,7 +3992,7 @@ static void resolveInitField(CallExpr* call) {
     if ((fs->hasFlag(FLAG_TYPE_VARIABLE) && isTypeExpr(rhs)) ||
         fs->hasFlag(FLAG_PARAM) ||
         (fs->defPoint->exprType == NULL && fs->defPoint->init == NULL)) {
-      AggregateType* instantiate = ct->getInstantiation(rhs, index);
+      AggregateType* instantiate = ct->getInstantiation(rhs->symbol(), index);
       if (instantiate != ct) {
         // TODO: make this set of operations a helper function I can call
         FnSymbol* parentFn = toFnSymbol(call->parentSymbol);
@@ -4164,6 +4193,19 @@ static void resolveMove(CallExpr* call) {
   if (rhsIsTypeExpr && rhs->typeInfo() == dtUnknown && isSymExpr(rhs)) {
     // Try resolving type aliases now.
     rhsType = resolveTypeAlias(toSymExpr(rhs));
+  }
+
+  if (rhsType == dtVoid) {
+    if (CallExpr* rhsCall = toCallExpr(rhs)) {
+      if (FnSymbol* rhsFn = rhsCall->resolvedFunction()) {
+        if (rhsFn->hasFlag(FLAG_VOID_NO_RETURN_VALUE)) {
+          USR_FATAL(userCall(call),
+                    "illegal use of function that does not "
+                    "return a value: '%s'",
+                    rhsFn->name);
+        }
+      }
+    }
   }
 
   // This is a workaround for problems where the _iterator
@@ -4446,8 +4488,10 @@ resolveCoerce(CallExpr* call) {
   // Adjust tuple reference-level for return if necessary
   if (toType->symbol->hasFlag(FLAG_TUPLE) &&
       !doNotChangeTupleTypeRefLevel(fn, true)) {
+    AggregateType* tupleType = toAggregateType(toType);
+    INT_ASSERT(tupleType);
 
-    Type* retType = getReturnedTupleType(fn, toType);
+    Type* retType = getReturnedTupleType(fn, tupleType);
     if (retType != toType) {
       // Also adjust any PRIM_COERCE calls
       call->get(2)->replace(new SymExpr(retType->symbol));
@@ -4759,22 +4803,25 @@ static void ensureGenericSafeForDeclarations(CallExpr* call, Type* type) {
     // Grab the generic type's constructor if it has one.  Things like
     // classes and records should.  Things like 'integral' will not.
     //
-    FnSymbol* typeCons = type->defaultTypeConstructor;
+    FnSymbol* typeCons = NULL;
+    if (AggregateType* at = toAggregateType(type)) {
+      typeCons = at->defaultTypeConstructor;
 
-    if (typeCons) {
-      //
-      // If it had one, create a zero-argument call to the type
-      // constructor, insert it into the code point in question,
-      // and try to resolve it (saving the answer).
-      //
-      CallExpr* typeConsCall = new CallExpr(typeCons->name);
-      call->replace(typeConsCall);
-      unsafeGeneric = (tryResolveCall(typeConsCall) == NULL);
+      if (typeCons) {
+        //
+        // If it had one, create a zero-argument call to the type
+        // constructor, insert it into the code point in question,
+        // and try to resolve it (saving the answer).
+        //
+        CallExpr* typeConsCall = new CallExpr(typeCons->name);
+        call->replace(typeConsCall);
+        unsafeGeneric = (tryResolveCall(typeConsCall) == NULL);
 
-      //
-      // Put things back the way they were.
-      //
-      typeConsCall->replace(call);
+        //
+        // Put things back the way they were.
+        //
+        typeConsCall->replace(call);
+      }
     }
 
     //
@@ -4850,12 +4897,13 @@ Expr* resolvePrimInit(CallExpr* call)
     }
   }
 
-  if (type->defaultInitializer)
-  {
-    if (type->symbol->hasFlag(FLAG_ITERATOR_RECORD))
-      // defaultInitializers for iterator record types cannot be called as
-      // default constructors.  So give up now!
-      return result;
+  if (AggregateType* at = toAggregateType(type)) {
+    if (at->defaultInitializer) {
+      if (type->symbol->hasFlag(FLAG_ITERATOR_RECORD))
+        // defaultInitializers for iterator record types cannot be called as
+        // default constructors.  So give up now!
+        return result;
+    }
   }
 
   //
@@ -5128,16 +5176,6 @@ resolveExpr(Expr* expr) {
             !ct->symbol->hasFlag(FLAG_ITERATOR_RECORD) &&
             ct->defaultTypeConstructor) {
 
-          if (ct->initializerStyle == DEFINES_INITIALIZER &&
-              (ct->isGeneric() ||
-               (isAggregateType(ct->instantiatedFrom) &&
-                toAggregateType(ct->instantiatedFrom)->isGeneric()))) {
-            USR_FATAL(ct,
-                      "Type constructors are not yet supported for "
-                      "generic types that define initializers.  "
-                      "As a workaround, try relying on type inference");
-          }
-
           resolveFormals(ct->defaultTypeConstructor);
 
           if (resolvedFormals.set_in(ct->defaultTypeConstructor)) {
@@ -5376,15 +5414,21 @@ static void instantiate_default_constructor(FnSymbol* fn) {
   // along with tuple type.
   //
   if (fn->instantiatedFrom && !fn->hasFlag(FLAG_PARTIAL_TUPLE)) {
-    INT_ASSERT(!fn->retType->defaultInitializer);
+    AggregateType* retAt = toAggregateType(fn->retType);
+    INT_ASSERT(retAt);
+
+    INT_ASSERT(!retAt->defaultInitializer);
     FnSymbol* instantiatedFrom = fn->instantiatedFrom;
     while (instantiatedFrom->instantiatedFrom)
       instantiatedFrom = instantiatedFrom->instantiatedFrom;
 
-    CallExpr* call = new CallExpr(instantiatedFrom->retType->defaultInitializer);
+    AggregateType* instanceRetAt = toAggregateType(instantiatedFrom->retType);
+    INT_ASSERT(instanceRetAt);
+
+    CallExpr* call = new CallExpr(instanceRetAt->defaultInitializer);
 
     // This should not be happening for iterators.
-    TypeSymbol* ts = instantiatedFrom->retType->symbol;
+    TypeSymbol* ts = instanceRetAt->symbol;
     INT_ASSERT(!ts->hasEitherFlag(FLAG_ITERATOR_RECORD, FLAG_ITERATOR_CLASS));
 
     for_formals(formal, fn) {
@@ -5403,9 +5447,9 @@ static void instantiate_default_constructor(FnSymbol* fn) {
     }
     fn->insertBeforeEpilogue(call);
     resolveCall(call);
-    fn->retType->defaultInitializer = call->resolvedFunction();
-    INT_ASSERT(fn->retType->defaultInitializer);
-    //      resolveFns(fn->retType->defaultInitializer);
+    retAt->defaultInitializer = call->resolvedFunction();
+    INT_ASSERT(retAt->defaultInitializer);
+    //      resolveFns(retAt->defaultInitializer);
     call->remove();
   }
 }
@@ -5473,7 +5517,9 @@ void resolveReturnType(FnSymbol* fn)
       !doNotChangeTupleTypeRefLevel(fn, true)) {
     // Compute the tuple type without any refs
     // Set the function return type to that type.
-    retType = getReturnedTupleType(fn, retType);
+    AggregateType* tupleType = toAggregateType(retType);
+    INT_ASSERT(tupleType);
+    retType = getReturnedTupleType(fn, tupleType);
   }
 
   ret->type = retType;
@@ -5695,19 +5741,20 @@ resolveFns(FnSymbol* fn) {
   // Resolve base class type constructors as well.
   if (fn->hasFlag(FLAG_TYPE_CONSTRUCTOR)) {
     forv_Vec(Type, parent, fn->retType->dispatchParents) {
-      if (isAggregateType(parent)        == true     &&
-          parent                         != dtValue  &&
-          parent                         != dtObject &&
-          parent->defaultTypeConstructor != NULL) {
-        resolveFormals(parent->defaultTypeConstructor);
+      AggregateType* pt = toAggregateType(parent);
+      if (pt                         != NULL     &&
+          pt                         != dtObject &&
+          pt->defaultTypeConstructor != NULL) {
+        resolveFormals(pt->defaultTypeConstructor);
 
-        if (resolvedFormals.set_in(parent->defaultTypeConstructor)) {
-          resolveFns(parent->defaultTypeConstructor);
+        if (resolvedFormals.set_in(pt->defaultTypeConstructor)) {
+          resolveFns(pt->defaultTypeConstructor);
         }
       }
     }
+    AggregateType* ct = toAggregateType(fn->retType);
 
-    if (AggregateType* ct = toAggregateType(fn->retType)) {
+    if (ct) {
       for_fields(field, ct) {
         if (AggregateType* fct = toAggregateType(field->type)) {
           if (fct->defaultTypeConstructor) {
@@ -5721,14 +5768,20 @@ resolveFns(FnSymbol* fn) {
       }
     }
 
-    // This instantiates the default constructor
-    // for  the corresponding type constructor.
-    instantiate_default_constructor(fn);
+    if (ct && ct->initializerStyle == DEFINES_INITIALIZER
+        && ct->instantiatedFrom) {
+      // Don't instantiate the default constructor for generic types that
+      // define initializers, they don't have one!
+    } else {
+      // This instantiates the default constructor
+      // for  the corresponding type constructor.
+      instantiate_default_constructor(fn);
+    }
 
     //
     // resolve destructor
     //
-    if (AggregateType* ct = toAggregateType(fn->retType)) {
+    if (ct) {
       if (!ct->destructor &&
           !ct->symbol->hasFlag(FLAG_REF) &&
           !isTupleContainingOnlyReferences(ct)) {
@@ -5843,8 +5896,8 @@ computeStandardModuleSet() {
   stack.add(standardModule);
 
   while (ModuleSymbol* mod = stack.pop()) {
-    if (mod->block->modUses) {
-      for_actuals(expr, mod->block->modUses) {
+    if (mod->block->useList) {
+      for_actuals(expr, mod->block->useList) {
         UseStmt* use = toUseStmt(expr);
         INT_ASSERT(use);
         SymExpr* se = toSymExpr(use->src);
@@ -5958,7 +6011,7 @@ void resolve() {
   clearPartialCopyDataFnMap();
 
   forv_Vec(BlockStmt, stmt, gBlockStmts) {
-    stmt->moduleUseClear();
+    stmt->useListClear();
   }
 
   resolved = true;
@@ -5983,7 +6036,9 @@ static void unmarkDefaultedGenerics() {
             formal != fn->_this &&
             !formal->hasFlag(FLAG_IS_MEME)) {
           SET_LINENO(formal);
-          formal->typeExpr = new BlockStmt(new CallExpr(formal->type->defaultTypeConstructor));
+          AggregateType* formalAt = toAggregateType(formal->type);
+          INT_ASSERT(formalAt);
+          formal->typeExpr = new BlockStmt(new CallExpr(formalAt->defaultTypeConstructor));
           insert_help(formal->typeExpr, NULL, formal);
           formal->type = dtUnknown;
         } else {
@@ -6090,12 +6145,15 @@ static void insertRuntimeTypeTemps() {
         ts->hasFlag(FLAG_HAS_RUNTIME_TYPE) &&
         !ts->hasFlag(FLAG_GENERIC)) {
       SET_LINENO(ts);
-      VarSymbol* tmp = newTemp("_runtime_type_tmp_", ts->type);
-      ts->type->defaultInitializer->insertBeforeEpilogue(new DefExpr(tmp));
+      AggregateType* at = toAggregateType(ts->type);
+      INT_ASSERT(at);
+
+      VarSymbol* tmp = newTemp("_runtime_type_tmp_", at);
+      at->defaultInitializer->insertBeforeEpilogue(new DefExpr(tmp));
       CallExpr* call = new CallExpr("chpl__convertValueToRuntimeType", tmp);
-      ts->type->defaultInitializer->insertBeforeEpilogue(call);
+      at->defaultInitializer->insertBeforeEpilogue(call);
       resolveCallAndCallee(call);
-      valueToRuntimeTypeMap.put(ts->type, call->resolvedFunction());
+      valueToRuntimeTypeMap.put(at, call->resolvedFunction());
       call->remove();
       tmp->defPoint->remove();
     }
@@ -6323,18 +6381,21 @@ static void resolveRecordInitializers() {
       // defaultTypeConstructor calls are already cleaned up at the end of
       // function resolution, so the noinit cleanup would be redundant.
       SET_LINENO(init);
-      CallExpr* res = new CallExpr(type->defaultTypeConstructor);
-      for_formals(formal, type->defaultTypeConstructor) {
+      AggregateType* rec = toAggregateType(type);
+      INT_ASSERT(rec);
+
+      CallExpr* res = new CallExpr(rec->defaultTypeConstructor);
+      for_formals(formal, rec->defaultTypeConstructor) {
         Vec<Symbol *> keys;
         // Finds each named argument in the type constructor and inserts
         // the substitution provided.
-        type->substitutions.get_keys(keys);
+        rec->substitutions.get_keys(keys);
         // I don't think we can guarantee that the substitutions will be
         // in the same order as the arguments for the defaultTypeConstructor.
         // That would make this O(n) instead of potentially O(n*n)
         forv_Vec(Symbol, key, keys) {
           if (!strcmp(formal->name, key->name)) {
-            Symbol* formalVal = type->substitutions.get(key);
+            Symbol* formalVal = rec->substitutions.get(key);
             res->insertAtTail(new NamedExpr(formal->name,
                                             new SymExpr(formalVal)));
           }
@@ -6362,7 +6423,9 @@ static void resolveRecordInitializers() {
       // code
       Symbol* tmp = newTemp("_distribution_tmp_");
       init->getStmtExpr()->insertBefore(new DefExpr(tmp));
-      CallExpr* classCall = new CallExpr(type->getField("_instance")->type->defaultInitializer);
+      AggregateType* instanceAt = toAggregateType(type->getField("_instance")->type);
+
+      CallExpr* classCall = new CallExpr(instanceAt->defaultInitializer);
       CallExpr* move = new CallExpr(PRIM_MOVE, tmp, classCall);
       init->getStmtExpr()->insertBefore(move);
       resolveCallAndCallee(classCall);
@@ -6688,6 +6751,16 @@ static void cleanupVoidVarsAndFields() {
             }
           }
         }
+      } else if (call->isPrimitive(PRIM_YIELD)) {
+        if (call->get(1)->typeInfo() == dtVoid ||
+            call->get(1)->typeInfo() == dtVoid->refType) {
+          if (SymExpr* ret = toSymExpr(call->get(1))) {
+            if (ret->symbol() != gVoid) {
+              SET_LINENO(call);
+              call->replace(new CallExpr(PRIM_YIELD, gVoid));
+            }
+          }
+        }
       }
       if (call->isResolved()) {
         for_actuals(actual, call) {
@@ -6713,6 +6786,15 @@ static void cleanupVoidVarsAndFields() {
       }
     }
   }
+
+  forv_Vec(BlockStmt, block, gBlockStmts) {
+    if (ForLoop* loop = toForLoop(block)) {
+      if (loop->indexGet() && loop->indexGet()->typeInfo() == dtVoid) {
+        loop->indexGet()->setSymbol(gVoid);
+      }
+    }
+  }
+
   forv_Vec(DefExpr, def, gDefExprs) {
     if (def->inTree()) {
       if (def->sym->type == dtVoid || def->sym->type == dtVoid->refType) {
@@ -6758,25 +6840,27 @@ pruneResolvedTree() {
 }
 
 static void clearDefaultInitFns(FnSymbol* unusedFn) {
+  AggregateType* at = toAggregateType(unusedFn->retType);
   // Before removing an unused function, check if it is a defaultInitializer.
   // If unusedFn is a defaultInitializer, its retType's defaultInitializer
   // field will be unusedFn. Set the defaultInitializer field to NULL so the
   // removed function doesn't leave behind a garbage pointer.
-  if (unusedFn->retType->defaultInitializer == unusedFn) {
-    unusedFn->retType->defaultInitializer = NULL;
-  }
-  // Also remove unused fns from iterator infos.
-  // Ditto for iterator fn in iterator info.
-  AggregateType* at = toAggregateType(unusedFn->retType);
-  if (at && at->iteratorInfo) {
-    IteratorInfo* ii = at->iteratorInfo;
-    INT_ASSERT(at->symbol->hasEitherFlag(FLAG_ITERATOR_RECORD,
-                                         FLAG_ITERATOR_CLASS));
-    if (ii) {
-      if (ii->iterator == unusedFn)
-        ii->iterator = NULL;
-      if (ii->getIterator == unusedFn)
-        ii->getIterator = NULL;
+  if (at) {
+    if (at->defaultInitializer == unusedFn) {
+      at->defaultInitializer = NULL;
+    }
+    // Also remove unused fns from iterator infos.
+    // Ditto for iterator fn in iterator info.
+    if (at->iteratorInfo) {
+      IteratorInfo* ii = at->iteratorInfo;
+      INT_ASSERT(at->symbol->hasEitherFlag(FLAG_ITERATOR_RECORD,
+                                           FLAG_ITERATOR_CLASS));
+      if (ii) {
+        if (ii->iterator == unusedFn)
+          ii->iterator = NULL;
+        if (ii->getIterator == unusedFn)
+          ii->getIterator = NULL;
+      }
     }
   }
 }
@@ -6917,8 +7001,10 @@ static void removeUnusedTypes() {
         }
         // If the default type constructor for this ref type is in the tree, it
         // can be removed.
-        if (type->type->defaultTypeConstructor->defPoint->parentSymbol)
-          type->type->defaultTypeConstructor->defPoint->remove();
+        AggregateType* at = toAggregateType(type->type);
+        INT_ASSERT(at);
+        if (at->defaultTypeConstructor->defPoint->parentSymbol)
+          at->defaultTypeConstructor->defPoint->remove();
       }
     }
   }

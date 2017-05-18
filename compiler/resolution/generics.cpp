@@ -22,6 +22,7 @@
 #include "astutil.h"
 #include "caches.h"
 #include "chpl.h"
+#include "driver.h"
 #include "expr.h"
 #include "PartialCopyData.h"
 #include "resolveIntents.h"
@@ -261,11 +262,11 @@ void renameInstantiatedTypeString(TypeSymbol* sym, VarSymbol* var)
  * \param call The call that is being resolved (used for scope)
  * \param type The generic type we wish to instantiate
  */
-static Type*
-instantiateTypeForTypeConstructor(FnSymbol* fn, SymbolMap& subs, CallExpr* call, Type* type) {
-  INT_ASSERT(isAggregateType(type));
-  AggregateType* ct = toAggregateType(type);
-
+static AggregateType*
+instantiateTypeForTypeConstructor(FnSymbol* fn,
+                                  SymbolMap& subs,
+                                  CallExpr* call,
+                                  AggregateType* ct) {
   Type* newType = NULL;
   newType = ct->symbol->copy()->type;
 
@@ -331,16 +332,16 @@ instantiateTypeForTypeConstructor(FnSymbol* fn, SymbolMap& subs, CallExpr* call,
     }
   }
 
-  newType->symbol->renameInstantiatedMulti(subs, fn);
+  newCt->symbol->renameInstantiatedMulti(subs, fn);
 
-  fn->retType->symbol->defPoint->insertBefore(new DefExpr(newType->symbol));
+  fn->retType->symbol->defPoint->insertBefore(new DefExpr(newCt->symbol));
 
-  newType->symbol->copyFlags(fn);
+  newCt->symbol->copyFlags(fn);
 
-  if (isSyncType(newType) || isSingleType(newType))
-    newType->defaultValue = NULL;
+  if (isSyncType(newCt) || isSingleType(newCt))
+    newCt->defaultValue = NULL;
 
-  newType->substitutions.copy(fn->retType->substitutions);
+  newCt->substitutions.copy(fn->retType->substitutions);
 
   // Add dispatch parents, but replace parent type with
   // instantiated parent type.
@@ -350,7 +351,7 @@ instantiateTypeForTypeConstructor(FnSymbol* fn, SymbolMap& subs, CallExpr* call,
     if (t == oldParentTy)
       useT = newParentTy;
 
-    newType->dispatchParents.add(useT);
+    newCt->dispatchParents.add(useT);
   }
 
   forv_Vec(Type, t, fn->retType->dispatchParents) {
@@ -359,19 +360,19 @@ instantiateTypeForTypeConstructor(FnSymbol* fn, SymbolMap& subs, CallExpr* call,
     if (t == oldParentTy)
       useT = newParentTy;
 
-    bool inserted = useT->dispatchChildren.add_exclusive(newType);
+    bool inserted = useT->dispatchChildren.add_exclusive(newCt);
 
     INT_ASSERT(inserted);
   }
 
-  if (newType->dispatchChildren.n)
+  if (newCt->dispatchChildren.n)
     INT_FATAL(fn, "generic type has subtypes");
 
-  newType->instantiatedFrom = fn->retType;
-  newType->substitutions.map_union(subs);
-  newType->symbol->removeFlag(FLAG_GENERIC);
+  newCt->instantiatedFrom = fn->retType;
+  newCt->substitutions.map_union(subs);
+  newCt->symbol->removeFlag(FLAG_GENERIC);
 
-  return newType;
+  return newCt;
 }
 
 /** Fully instantiate a generic function given a map of substitutions and a
@@ -469,13 +470,20 @@ FnSymbol* instantiateSignature(FnSymbol*  fn,
       //
       // copy generic class type if this function is a type constructor
       //
-      Type* newType = NULL;
+      AggregateType* newType = NULL;
 
       if (fn->hasFlag(FLAG_TYPE_CONSTRUCTOR)) {
-        newType = instantiateTypeForTypeConstructor(fn,
-                                                    subs,
-                                                    call,
-                                                    fn->retType);
+        INT_ASSERT(isAggregateType(fn->retType));
+        AggregateType* ct = toAggregateType(fn->retType);
+
+        if (ct->initializerStyle != DEFINES_INITIALIZER) {
+          newType = instantiateTypeForTypeConstructor(fn,
+                                                      subs,
+                                                      call,
+                                                      ct);
+        } else {
+          newType = ct->getInstantiationMulti(subs, fn);
+        }
       }
 
       //

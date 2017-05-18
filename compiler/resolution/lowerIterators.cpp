@@ -21,6 +21,7 @@
 
 #include "astutil.h"
 #include "CForLoop.h"
+#include "driver.h"
 #include "expr.h"
 #include "ForLoop.h"
 #include "iterator.h"
@@ -57,9 +58,11 @@ FnSymbol* getTheIteratorFn(CallExpr* call) {
 FnSymbol* getTheIteratorFn(Type* icType)
 {
   // the asserts document the current state
+  AggregateType* icTypeAgg = toAggregateType(icType);
+  INT_ASSERT(icTypeAgg);
 
   if (icType->symbol->hasFlag(FLAG_TUPLE)) {
-    FnSymbol* getIterFn = icType->defaultInitializer;
+    FnSymbol* getIterFn = icTypeAgg->defaultInitializer;
     // A tuple of iterator classes -> first argument to
     // tuple constructor is the iterator class type.
     Type* firstIcType = getIterFn->getFormal(1)->type;
@@ -70,7 +73,6 @@ FnSymbol* getTheIteratorFn(Type* icType)
     return result;
   } else {
     INT_ASSERT(icType->symbol->hasFlag(FLAG_ITERATOR_CLASS));
-    AggregateType* icTypeAgg = toAggregateType(icType);
     INT_ASSERT(icTypeAgg->iteratorInfo);
     FnSymbol* getIterFn = icTypeAgg->iteratorInfo->getIterator;
     // The type of _getIterator's first formal arg is _iteratorRecord.
@@ -1736,8 +1738,10 @@ expandForLoop(ForLoop* forLoop) {
     // 2015-02-23 hilde:
     // TODO: I think this wants to be insertBefore, and moved before the call
     // to getValue is inserted.  Check the order in the generated code to see
-    // if this is the case.
-    forLoop->insertAtHead(index->defPoint->remove());
+    // if this is the case.  Avoid moving the global void value when it is
+    // the loop index.
+    if (index != gVoid)
+      forLoop->insertAtHead(index->defPoint->remove());
 
     // Ensure that the test clause for completely unbounded loops contains
     // something.

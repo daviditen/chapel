@@ -1871,10 +1871,27 @@ void EnumSymbol::accept(AstVisitor* visitor) {
   visitor->visitEnumSym(this);
 }
 
-/******************************** | *********************************
-*                                                                   *
-*                                                                   *
-********************************* | ********************************/
+/************************************* | **************************************
+*                                                                             *
+*                                                                             *
+*                                                                             *
+************************************** | *************************************/
+
+static std::vector<ModuleSymbol*>    sTopLevelModules;
+
+void ModuleSymbol::addTopLevelModule(ModuleSymbol* module) {
+  sTopLevelModules.push_back(module);
+
+  theProgram->block->insertAtTail(new DefExpr(module));
+}
+
+
+void ModuleSymbol::getTopLevelModules(std::vector<ModuleSymbol*>& mods) {
+  for (size_t i = 0; i < sTopLevelModules.size(); i++) {
+    mods.push_back(sTopLevelModules[i]);
+  }
+}
+
 
 ModuleSymbol::ModuleSymbol(const char* iName,
                            ModTag      iModTag,
@@ -2249,7 +2266,7 @@ void ModuleSymbol::addDefaultUses() {
   } else if (this == baseModule) {
     SET_LINENO(this);
 
-    block->moduleUseAdd(rootModule);
+    block->useListAdd(rootModule);
 
     UnresolvedSymExpr* modRef = new UnresolvedSymExpr("ChapelStringLiterals");
     block->insertAtHead(new UseStmt(modRef));
@@ -2289,7 +2306,7 @@ void ModuleSymbol::moduleUseRemove(ModuleSymbol* mod) {
   int index = modUseList.index(mod);
 
   if (index >= 0) {
-    bool inBlock = block->moduleUseRemove(mod);
+    bool inBlock = block->useListRemove(mod);
 
     modUseList.remove(index);
 
@@ -2299,13 +2316,32 @@ void ModuleSymbol::moduleUseRemove(ModuleSymbol* mod) {
       if (modUseList.index(modUsedByDeadMod) < 0) {
         SET_LINENO(this);
 
-        if (inBlock == true)
-          block->moduleUseAdd(modUsedByDeadMod);
+        if (inBlock == true) {
+          block->useListAdd(modUsedByDeadMod);
+        }
 
         modUseList.add(modUsedByDeadMod);
       }
     }
   }
+}
+
+void initRootModule() {
+  rootModule           = new ModuleSymbol("_root",
+                                          MOD_INTERNAL,
+                                          new BlockStmt());
+
+  rootModule->filename = astr("<internal>");
+}
+
+void initStringLiteralModule() {
+  stringLiteralModule           = new ModuleSymbol("ChapelStringLiterals",
+                                                   MOD_INTERNAL,
+                                                   new BlockStmt());
+
+  stringLiteralModule->filename = astr("<internal>");
+
+  ModuleSymbol::addTopLevelModule(stringLiteralModule);
 }
 
 /******************************** | *********************************
@@ -2722,6 +2758,26 @@ VarSymbol *new_ComplexSymbol(const char *n, long double r, long double i,
   return s;
 }
 
+VarSymbol* new_CommIDSymbol(int64_t b) {
+  IF1_int_type size = INT_SIZE_64;
+  Immediate imm;
+  imm.v_int64 = b;
+
+  imm.const_kind = NUM_KIND_COMMID;
+  imm.num_index = size;
+  VarSymbol *s = uniqueConstantsHash.get(&imm);
+  PrimitiveType* dtRetType = dtInt[size];
+  if (s) {
+    return s;
+  }
+  s = new VarSymbol(astr("_literal_", istr(literal_id++)), dtRetType);
+  rootModule->block->insertAtTail(new DefExpr(s));
+  s->immediate = new Immediate;
+  *s->immediate = imm;
+  uniqueConstantsHash.put(s->immediate, s);
+  return s;
+}
+
 static Type*
 immediate_type(Immediate *imm) {
   switch (imm->const_kind) {
@@ -2798,6 +2854,12 @@ FlagSet getRecordWrappedFlags(Symbol* s) {
   return s->flags & mask;
 }
 
+/******************************** | *********************************
+*                                                                   *
+* Create a temporary, with FLAG_TEMP and (optionally) FLAG_CONST.   *
+*                                                                   *
+********************************* | ********************************/
+
 VarSymbol* newTemp(const char* name, QualifiedType qt) {
   VarSymbol* vs = newTemp(name, qt.type());
   vs->qual = qt.getQual();
@@ -2820,7 +2882,30 @@ VarSymbol* newTemp(const char* name, Type* type) {
   return vs;
 }
 
-
 VarSymbol* newTemp(Type* type) {
   return newTemp((const char*)NULL, type);
+}
+
+VarSymbol* newTempConst(const char* name, Type* type) {
+  VarSymbol* result = newTemp(name, type);
+  result->addFlag(FLAG_CONST);
+  return result;
+}
+
+VarSymbol* newTempConst(Type* type) {
+  VarSymbol* result = newTemp(type);
+  result->addFlag(FLAG_CONST);
+  return result;
+}
+
+VarSymbol* newTempConst(const char* name, QualifiedType qt) {
+  VarSymbol* result = newTemp(name, qt);
+  result->addFlag(FLAG_CONST);
+  return result;
+}
+
+VarSymbol* newTempConst(QualifiedType qt) {
+  VarSymbol* result = newTemp(qt);
+  result->addFlag(FLAG_CONST);
+  return result;
 }
