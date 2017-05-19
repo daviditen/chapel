@@ -818,7 +818,26 @@ module DefaultAssociative {
     return _gen_key(__primitive( "object2int", o));
   }
 
-  inline proc chpl__defaultHash(r: ?t) where isRecordType(t) || isTupleType(t) {
+  inline proc chpl__defaultHash(tup: ?t) where isTupleType(t) {
+    var hashTmp: tup.size*uint;
+
+    inline proc chpl__defaultHashCombineRecord(a: uint, b: uint, param i) {
+      return chpl__defaultHashCombine(b, a, i);
+    }
+
+    inline proc chpl__defaultHashCombineRecord(a: uint, b: uint,
+                                               rest...?n, param i=2) {
+      return chpl__defaultHashCombineRecord(chpl__defaultHashCombine(b, a, i),
+                                            (...rest), i+1);
+    }
+
+    for param i in 1..tup.size {
+      hashTmp[i] = chpl__defaultHash(tup(i));
+    }
+    return chpl__defaultHashCombineRecord((...hashTmp), 2);
+  }
+
+  inline proc chpl__defaultHash(r: ?t) where isRecordType(t) {
     use Reflection;
 
     inline proc chpl__defaultHashCombineRecord(a: uint, b: uint, param i) {
