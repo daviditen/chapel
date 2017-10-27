@@ -26,6 +26,7 @@
 
 #include "passes.h"
 
+#include "AstToText.h"
 #include "astutil.h"
 #include "build.h"
 #include "expr.h"
@@ -75,6 +76,13 @@ static void cleanup(ModuleSymbol* module) {
     if (DefExpr* def = toDefExpr(ast)) {
       if (FnSymbol* fn = toFnSymbol(def->sym)) {
         SET_LINENO(def);
+
+        if (fn->where && fn->where->body.length == 1) {
+          // store a textual copy of the where clause before it gets normalized
+          AstToText info;
+          info.appendExpr(fn->where->body.only(), false);
+          fn->whereClauseString = astr(info.text().c_str());
+        }
 
         if (fn->hasFlag(FLAG_COMPILER_NESTED_FUNCTION) == true) {
           normalizeNestedFunctionExpressions(fn);

@@ -1246,6 +1246,7 @@ FnSymbol::FnSymbol(const char* initName) : Symbol(E_FnSymbol, initName) {
   basicBlocks        = NULL;
   calledBy           = NULL;
   userString         = NULL;
+  whereClauseString  = NULL;
   valueFunction      = NULL;
   codegenUniqueNum   = 1;
   doc                = NULL;
@@ -2213,10 +2214,8 @@ const char* toString(FnSymbol* fn) {
     }
   }
 
-  if (fn->where && fn->where->body.length == 1) {
-    AstToText info;
-    info.appendExpr(fn->where->body.only(), false);
-    retval = astr(retval, " where ", info.text().c_str());
+  if (fn->whereClauseString) {
+    retval = astr(retval, " where ", fn->whereClauseString);
   }
 
   if (developer) {

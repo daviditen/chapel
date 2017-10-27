@@ -512,7 +512,7 @@ public:
   std::vector<BasicBlock*>*  basicBlocks;
   Vec<CallExpr*>*            calledBy;
   const char*                userString;
-
+  const char*                whereClauseString;
   // pointer to value function (created in function resolution
   // and used in cullOverReferences)
   FnSymbol*                  valueFunction;
