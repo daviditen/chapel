@@ -55,6 +55,7 @@ noComments = False
 DEBUG      = False
 
 VARARGS_STR = "c__varargs ..."
+unnamedStructCounter = 0
 
 ## Global dictionary of C->Chapel mappings. New types can
 ## be registered here.
@@ -162,6 +163,10 @@ def getDeclName(decl):
         name = inner.name
     elif type(inner) == c_ast.Decl:
         name = inner.name
+    elif type(inner) == c_ast.Enum:
+        name = inner.name
+        # genTypedefs(inner) # want to generate something like 'extern type EnumName' here
+        genEnum(inner) # want these to have type 'EnumName' instead of 'c_int'
     else:
         raise Exception("Unhandled node type: " + str(type(inner)))
     return name
@@ -306,6 +311,12 @@ def isStructDef(decl):
 def genStruct(struct, name=""):
     if name == "":
         name = struct.name
+
+    if name == None:
+        global unnamedStructCounter
+        name = "unnamedStruct" + str(unnamedStructCounter)
+        struct.name = name
+        unnamedStructCounter += 1
 
     if name in chapelKeywords:
         genComment("Unable to generate struct '" + name + "' because its name is a Chapel keyword")
