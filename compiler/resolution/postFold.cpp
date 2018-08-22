@@ -585,8 +585,7 @@ static Expr* postFoldMove(CallExpr* call) {
 static bool postFoldMoveUpdateForParam(CallExpr* call, Symbol* lhsSym) {
   bool retval = false;
 
-  if (lhsSym->hasFlag(FLAG_MAYBE_PARAM) == true ||
-      lhsSym->isParameter()             == true) {
+  if (lhsSym->hasFlag(FLAG_MAYBE_PARAM) || lhsSym->isParameter()) {
     if (paramMap.get(lhsSym) != NULL) {
       INT_FATAL(call, "parameter set multiple times");
 
@@ -596,8 +595,7 @@ static bool postFoldMoveUpdateForParam(CallExpr* call, Symbol* lhsSym) {
     } else if (SymExpr* rhs = toSymExpr(call->get(2))) {
       Symbol* rhsSym = rhs->symbol();
 
-      if (rhsSym->isImmediate() == true ||
-          isEnumSymbol(rhsSym)  == true) {
+      if (rhsSym->isImmediate() || isEnumSymbol(rhsSym) || rhsSym == gVoid) {
         paramMap.put(lhsSym, rhsSym);
 
         lhsSym->defPoint->remove();
@@ -608,8 +606,8 @@ static bool postFoldMoveUpdateForParam(CallExpr* call, Symbol* lhsSym) {
       }
     }
 
-    if (lhsSym->isParameter() == true) {
-      if (retval == true) {
+    if (lhsSym->isParameter()) {
+      if (retval) {
         if (lhsSym->hasFlag(FLAG_TEMP)     == false  &&
             isLegalParamType(lhsSym->type) == false) {
           USR_FATAL_CONT(call,
@@ -633,7 +631,7 @@ static bool postFoldMoveUpdateForParam(CallExpr* call, Symbol* lhsSym) {
             lhsSym->removeFlag(FLAG_PARAM);
           }
 
-        } else if (lhsSym->hasFlag(FLAG_RVV) == true) {
+        } else if (lhsSym->hasFlag(FLAG_RVV)) {
           USR_FATAL_CONT(call,
                          "'param' functions cannot return non-'param' values");
         }

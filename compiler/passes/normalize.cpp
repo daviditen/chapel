@@ -1088,31 +1088,28 @@ static void normalizeReturns(FnSymbol* fn) {
   std::vector<CallExpr*> rets;
   std::vector<CallExpr*> calls;
   size_t                 numVoidReturns = 0;
-  CallExpr*              theRet         = NULL;
   bool                   isIterator     = fn->isIterator();
 
   collectMyCallExprs(fn, calls, fn);
 
   for_vector(CallExpr, call, calls) {
-    if (call->isPrimitive(PRIM_RETURN) == true) {
+    if (call->isPrimitive(PRIM_RETURN)) {
       rets.push_back(call);
 
-      theRet = call;
-
-      if (isVoidReturn(call) == true) {
+      if (isVoidReturn(call)) {
         numVoidReturns++;
       }
     }
   }
 
   // Check if this function's returns are already normal.
-  if (rets.size() == 1 && theRet == fn->body->body.last()) {
-    if (SymExpr* se = toSymExpr(theRet->get(1))) {
-      if (fn->hasFlag(FLAG_CONSTRUCTOR)         == true ||
-          fn->hasFlag(FLAG_TYPE_CONSTRUCTOR)    == true ||
+  if (rets.size() == 1 && rets.front() == fn->body->body.last()) {
+    if (SymExpr* se = toSymExpr(rets.front()->get(1))) {
+      if (fn->hasFlag(FLAG_CONSTRUCTOR)                 ||
+          fn->hasFlag(FLAG_TYPE_CONSTRUCTOR)            ||
           strncmp("_if_fn", fn->name, 6)        ==    0 ||
           strcmp ("=",      fn->name)           ==    0 ||
-          strcmp ("_init",  fn->name)           ==    0||
+          strcmp ("_init",  fn->name)           ==    0 ||
           strcmp ("_ret",   se->symbol()->name) ==    0) {
         return;
       }
@@ -1134,7 +1131,7 @@ static void normalizeReturns(FnSymbol* fn) {
   fn->insertAtTail(new DefExpr(label));
 
   // Check that iterators do not return 'void'
-  if (isIterator == true) {
+  if (isIterator) {
     if (fn->retExprType != NULL && fn->retTag != RET_REF) {
       if (SymExpr* lastRTE = toSymExpr(fn->retExprType->body.tail)) {
         if (TypeSymbol* retSym = toTypeSymbol(lastRTE->symbol())) {
@@ -1149,35 +1146,25 @@ static void normalizeReturns(FnSymbol* fn) {
     }
   }
 
-  // If a proc has a void return, do not return any values ever.
-  // (Types are not resolved yet, so we judge by presence of "void returns"
-  // i.e. returns with no expr. See also a related check in semanticChecks.)
-  // (Note iterators always need an RVV so resolution knows to resolve the
-  //  return/yield type)
-  if (isIterator == false && numVoidReturns != 0) {
-    fn->insertAtTail(new CallExpr(PRIM_RETURN, gVoid));
+  // Handle declared return type.
+  retval = newTemp("ret", fn->retType);
 
-  } else {
-    // Handle declared return type.
-    retval = newTemp("ret", fn->retType);
+  retval->addFlag(FLAG_RVV);
 
-    retval->addFlag(FLAG_RVV);
-
-    if (fn->retTag == RET_PARAM) {
-      retval->addFlag(FLAG_PARAM);
-    }
-
-    if (fn->retTag == RET_TYPE) {
-      retval->addFlag(FLAG_TYPE_VARIABLE);
-    }
-
-    if (fn->hasFlag(FLAG_MAYBE_TYPE)) {
-      retval->addFlag(FLAG_MAYBE_TYPE);
-    }
-
-    fn->insertAtHead(new DefExpr(retval));
-    fn->insertAtTail(new CallExpr(PRIM_RETURN, retval));
+  if (fn->retTag == RET_PARAM) {
+    retval->addFlag(FLAG_PARAM);
   }
+
+  if (fn->retTag == RET_TYPE) {
+    retval->addFlag(FLAG_TYPE_VARIABLE);
+  }
+
+  if (fn->hasFlag(FLAG_MAYBE_TYPE)) {
+    retval->addFlag(FLAG_MAYBE_TYPE);
+  }
+
+  fn->insertAtHead(new DefExpr(retval));
+  fn->insertAtTail(new CallExpr(PRIM_RETURN, retval));
 
   bool genericArrayRet = hasGenericArrayReturn(fn);
 
@@ -1186,7 +1173,7 @@ static void normalizeReturns(FnSymbol* fn) {
   for_vector(CallExpr, ret, rets) {
     SET_LINENO(ret);
 
-    if (isIterator == false && retval != NULL) {
+    if (!isIterator) {
       insertRetMove(fn, retval, ret, genericArrayRet);
     }
 
@@ -1342,7 +1329,7 @@ static void insertRetMove(FnSymbol* fn, VarSymbol* retval, CallExpr* ret,
                           bool genericArrayRet) {
   Expr* retExpr = ret->get(1)->remove();
 
-  if (fn->returnsRefOrConstRef() == true) {
+  if (fn->returnsRefOrConstRef()) {
     CallExpr* addrOf = new CallExpr(PRIM_ADDR_OF, retExpr);
 
     ret->insertBefore(new CallExpr(PRIM_MOVE, retval, addrOf));
@@ -1356,7 +1343,7 @@ static void insertRetMove(FnSymbol* fn, VarSymbol* retval, CallExpr* ret,
 
     ret->insertBefore(new CallExpr(PRIM_MOVE, retval, coerce));
 
-  } else if (fn->hasFlag(FLAG_MAYBE_REF) == true) {
+  } else if (fn->hasFlag(FLAG_MAYBE_REF)) {
     ret->insertBefore(new CallExpr(PRIM_MOVE, retval, retExpr));
 
   } else if (fn->hasFlag(FLAG_WRAPPER)             == false &&
