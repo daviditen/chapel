@@ -24,6 +24,7 @@ use Spawn;
 use FileSystem;
 use TOML;
 use Path;
+use MasonEnv;
 
 /* Gets environment variables for spawn commands */
 extern proc getenv(name : c_string) : c_string;
@@ -39,7 +40,7 @@ class MasonError : Error {
   proc init(msg:string) {
     this.msg = msg;
   }
-  proc message() {
+  override proc message() {
     return msg;
   }
 }
@@ -51,6 +52,7 @@ proc makeTargetFiles(binLoc: string, projectHome: string) {
   const target = joinPath(projectHome, 'target');
   const srcBin = joinPath(target, binLoc);
   const test = joinPath(target, 'test');
+  const example = joinPath(target, 'example');
 
   if !isDir(target) {
     mkdir(target);
@@ -60,6 +62,9 @@ proc makeTargetFiles(binLoc: string, projectHome: string) {
   }
   if !isDir(test) {
     mkdir(test);
+  }
+  if !isDir(example) {
+    mkdir(example);
   }
 }
 
@@ -76,23 +81,26 @@ proc stripExt(toStrip: string, ext: string) : string {
 
 
 /* Uses the Spawn module to create a subprocess */
-proc runCommand(cmd, quiet=false) : string {
+proc runCommand(cmd, quiet=false) : string throws {
   var ret : string;
+  try {
+    
+    var splitCmd = cmd.split();
+    var process = spawn(splitCmd, stdout=PIPE);
 
-  var splitCmd = cmd.split();
-  var process = spawn(splitCmd, stdout=PIPE);
-  process.wait();
-
-  for line in process.stdout.lines() {
-    ret += line;
-    if quiet == false {
-      write(line);
+    for line in process.stdout.lines() {
+      ret += line;
+      if quiet == false {
+        write(line);
+      }
     }
+    process.wait();
   }
-
+  catch {
+    throw new MasonError("Internal mason error");
+  }
   return ret;
 }
-
 
 /* Same as runCommand but for situations where an
    exit status is needed */
@@ -113,6 +121,58 @@ proc runWithStatus(command, show=true): int {
     return -1;
   }
 }
+
+
+/* uses spawnshell and the prefix to setup Spack before
+   calling the spack command. This also returns the stdout
+   of the spack call.
+   TODO: get to work with Spawn */
+proc getSpackResult(cmd, quiet=false) : string throws {
+  var ret : string;
+  try {
+
+
+    var prefix = "export SPACK_ROOT=" + MASON_HOME + "/spack" +
+    " && export PATH=$SPACK_ROOT/bin:$PATH" +
+    " && source $SPACK_ROOT/share/spack/setup-env.sh && ";
+    var splitCmd = prefix + cmd;
+    var process = spawnshell(splitCmd, stdout=PIPE);
+    
+    for line in process.stdout.lines() {
+      ret += line;
+      if quiet == false {
+        write(line);
+      }
+    }
+    process.wait();
+  }
+  catch {
+    throw new MasonError("Internal mason error");
+  }
+  return ret;
+}
+
+
+/* Sets up spack by prefixing command with spack env vars
+   Only returns the exit status of the command
+   TODO: get to work with Spawn */
+proc runSpackCommand(command) {
+
+  var prefix = "export SPACK_ROOT=" + MASON_HOME + "/spack" +
+    " && export PATH=$SPACK_ROOT/bin:$PATH" +
+    " && source $SPACK_ROOT/share/spack/setup-env.sh && ";
+
+  var cmd = (prefix + command);
+  var sub = spawnshell(cmd, stderr=PIPE);
+  sub.wait();
+
+  for line in sub.stderr.lines() {
+    write(line);
+  }
+
+  return sub.exit_status;
+}
+
 
 proc hasOptions(args : [] string, const opts : string ...) {
   var ret = false;
@@ -275,33 +335,83 @@ proc getProjectHome(cwd: string, tomlName="Mason.toml") : string throws {
 }
 
 
-extern "struct stat" record chpl_stat {
-  var st_mtime: off_t;
+extern "struct sys_stat_s" record chpl_stat {
+  var st_mtim: chpl_timespec;
+}
+
+extern "struct timespec" record chpl_timespec {
+  var tv_sec: int;
+  var tv_nsec: int;
 }
 
 proc getLastModified(filename: string) : int {
-  extern proc stat(filename: c_string, ref chpl_stat): c_int;
+  extern proc sys_stat(filename: c_string, ref chpl_stat): c_int;
 
   var file_buf: chpl_stat;
   var file_path = filename.c_str();
 
-  if (stat(file_path, file_buf) == 0) {
-    return file_buf.st_mtime;
+  if (sys_stat(file_path, file_buf) == 0) {
+    return file_buf.st_mtim.tv_sec;
     }
   return -1;
 }
 
 proc projectModified(projectHome, projectName, binLocation) : bool {
   const binaryPath = joinPath(projectHome, "target", binLocation, projectName);
-
+  const tomlPath = joinPath(projectHome, "Mason.toml");
+   
   if isFile(binaryPath) {
+    const binModTime = getLastModified(binaryPath);
     for file in listdir(joinPath(projectHome, "src")) {
       var srcPath = joinPath(projectHome, "src", file);
-      if getLastModified(srcPath) > getLastModified(binaryPath) {
+      if getLastModified(srcPath) > binModTime {
         return true;
       }
+    }
+    if getLastModified(tomlPath) > binModTime {
+      return true;
     }
     return false;
   }
   return true;
 }
+
+/* Return 'true' for valid identifiers according to Chapel parser/spec,
+   otherwise 'false' */
+proc isIdentifier(name:string) {
+
+  // Identifiers can't be empty
+  if name == "" then
+    return false;
+
+  // Identifiers can't start with a digit or a $
+  if name[1].isDigit() then
+    return false;
+  if name[1] == "$" then
+    return false;
+
+  // Check all characters are legal identifier characters
+  // - lower case alphabetic
+  // - upper case alphabetic
+  // - digits
+  // - _
+  // - $
+  var ok = true;
+  for ch in name {
+    if !(ch == "$" || ch == "_" || ch.isAlnum()) then
+      ok = false;
+  }
+  return ok;
+}
+
+
+/* Iterator to collect fields from a toml
+   TODO custom fields returned */
+iter allFields(tomlTbl: unmanaged Toml) {
+  for (k,v) in zip(tomlTbl.D, tomlTbl.A) {
+    if v.tag == fieldToml then
+      continue;
+    else yield(k,v);
+  }
+}
+

@@ -40,6 +40,8 @@ static void normalizeNestedFunctionExpressions(FnSymbol* fn);
 
 static void destructureTupleAssignment(CallExpr* call);
 
+static void replaceIsSubtypeWithPrimitive(CallExpr* call, bool proper);
+
 static void flattenPrimaryMethod(TypeSymbol* ts, FnSymbol* fn);
 
 static void applyAtomicTypeToPrimaryMethod(TypeSymbol* ts, FnSymbol* fn);
@@ -91,9 +93,12 @@ static void cleanup(ModuleSymbol* module) {
       }
 
     } else if (CallExpr* call = toCallExpr(ast)) {
-      if (call->isNamed("_build_tuple") == true) {
+      if (call->isNamed("_build_tuple"))
         destructureTupleAssignment(call);
-      }
+      else if (call->isNamed("isSubtype"))
+        replaceIsSubtypeWithPrimitive(call, false);
+      else if (call->isNamed("isProperSubtype"))
+        replaceIsSubtypeWithPrimitive(call, true);
 
     } else if (DefExpr* def = toDefExpr(ast)) {
       if (FnSymbol* fn = toFnSymbol(def->sym)) {
@@ -191,6 +196,16 @@ static void destructureTupleAssignment(CallExpr* call) {
   }
 }
 
+
+static void replaceIsSubtypeWithPrimitive(CallExpr* call, bool proper) {
+  Expr* sub = call->get(1);
+  Expr* sup = call->get(2);
+  sub->remove();
+  sup->remove();
+
+  PrimitiveTag prim = proper ? PRIM_IS_PROPER_SUBTYPE : PRIM_IS_SUBTYPE;
+  call->replace(new CallExpr(prim, sup, sub));
+}
 
 //
 // If call is an empty return statement, e.g. "return;"
@@ -353,7 +368,12 @@ static void changeCastInWhere(FnSymbol* fn) {
           to->remove();
           from->remove();
 
-          call->replace(new CallExpr(PRIM_IS_SUBTYPE, to, from));
+          // Note, this deprecation warning along with the rest of
+          // changeCastInWhere should be removed after 1.18.
+          USR_WARN(call, "Special handling for : in where clauses has "
+                         "been deprecated. Please use isSubtype instead.");
+
+          call->replace(new CallExpr(PRIM_IS_SUBTYPE_ALLOW_VALUES, to, from));
         }
       }
     }

@@ -32,8 +32,6 @@
 #include "stringutil.h"
 #include "symbol.h"
 
-static bool isCandidateFn(ResolutionCandidate* res, CallInfo& info);
-
 /************************************* | **************************************
 *                                                                             *
 *                                                                             *
@@ -71,15 +69,10 @@ bool ResolutionCandidate::isApplicableConcrete(CallInfo& info) {
 
   fn = expandIfVarArgs(fn, info);
 
-  if (fn != NULL && isCandidateFn(this, info)) {
+  if (fn != NULL) {
     resolveTypedefedArgTypes();
 
     if (computeAlignment(info) == true) {
-      // Ensure that type constructor is resolved before other constructors.
-      if (fn->hasFlag(FLAG_DEFAULT_CONSTRUCTOR) == true) {
-        resolveTypeConstructor(info);
-      }
-
       retval = checkResolveFormalsWhereClauses(info);
     }
   }
@@ -95,35 +88,35 @@ void ResolutionCandidate::resolveTypeConstructor(CallInfo& info) {
   if (fn->hasFlag(FLAG_PARTIAL_TUPLE) == false) {
     AggregateType* at = toAggregateType(fn->_this->type);
     INT_ASSERT(at->typeConstructor != NULL);
+
+    if (at->typeConstructor->isResolved()) return;
+
     CallExpr* typeConstructorCall = new CallExpr(at->typeConstructor);
 
     for_formals(formal, fn) {
-      if (formal->hasFlag(FLAG_IS_MEME) == false) {
-        if (fn->_this->type->symbol->hasFlag(FLAG_TUPLE)) {
-          if (formal->instantiatedFrom != NULL) {
-            typeConstructorCall->insertAtTail(formal->type->symbol);
+      if (fn->_this->type->symbol->hasFlag(FLAG_TUPLE)) {
+        if (formal->instantiatedFrom != NULL) {
+          typeConstructorCall->insertAtTail(formal->type->symbol);
 
-          } else if (formal->hasFlag(FLAG_INSTANTIATED_PARAM)) {
-            typeConstructorCall->insertAtTail(paramMap.get(formal));
-          }
+        } else if (formal->hasFlag(FLAG_INSTANTIATED_PARAM)) {
+          typeConstructorCall->insertAtTail(paramMap.get(formal));
+        }
 
-        } else {
-          if (strcmp(formal->name, "outer") == 0 ||
-              formal->type                  == dtMethodToken) {
-            typeConstructorCall->insertAtTail(formal);
+      } else {
+        if (formal->type == dtMethodToken) {
+          typeConstructorCall->insertAtTail(formal);
 
-          } else if (formal->instantiatedFrom != NULL) {
-            SymExpr*   se = new SymExpr(formal->type->symbol);
-            NamedExpr* ne = new NamedExpr(formal->name, se);
+        } else if (formal->instantiatedFrom != NULL) {
+          SymExpr*   se = new SymExpr(formal->type->symbol);
+          NamedExpr* ne = new NamedExpr(formal->name, se);
 
-            typeConstructorCall->insertAtTail(ne);
+          typeConstructorCall->insertAtTail(ne);
 
-          } else if (formal->hasFlag(FLAG_INSTANTIATED_PARAM)) {
-            SymExpr*   se = new SymExpr(paramMap.get(formal));
-            NamedExpr* ne = new NamedExpr(formal->name, se);
+        } else if (formal->hasFlag(FLAG_INSTANTIATED_PARAM)) {
+          SymExpr*   se = new SymExpr(paramMap.get(formal));
+          NamedExpr* ne = new NamedExpr(formal->name, se);
 
-            typeConstructorCall->insertAtTail(ne);
-          }
+          typeConstructorCall->insertAtTail(ne);
         }
       }
     }
@@ -312,16 +305,10 @@ bool ResolutionCandidate::verifyGenericFormal(ArgSymbol* formal) const {
   if (formal->intent                      != INTENT_PARAM &&
       formal->hasFlag(FLAG_TYPE_VARIABLE) == false        &&
       formal->type                        != dtAny) {
-    if (strcmp(formal->name, "outer") != 0     &&
-        formal->hasFlag(FLAG_IS_MEME) == false &&
-        (fn->hasFlag(FLAG_DEFAULT_CONSTRUCTOR) == true ||
-         fn->hasFlag(FLAG_TYPE_CONSTRUCTOR)    == true)) {
+    if (fn->hasFlag(FLAG_TYPE_CONSTRUCTOR)) {
       retval = false;
 
-    } else if (fn->isMethod()                       == true  &&
-               strcmp(fn->name, "init")             == 0     &&
-               fn->hasFlag(FLAG_COMPILER_GENERATED) == true  &&
-               fn->hasFlag(FLAG_DEFAULT_COPY_INIT)  == false &&
+    } else if (fn->isDefaultInit() &&
                (formal->hasFlag(FLAG_ARG_THIS)                == false ||
                 formal->hasFlag(FLAG_DELAY_GENERIC_EXPANSION) == false)) {
       // This is a compiler generated initializer, so the argument with
@@ -427,7 +414,7 @@ Type* getInstantiationType(Type* actualType, Type* formalType) {
   // with the promotion type.
   if (ret == NULL) {
     if (Type* st = actualType->getValType()->scalarPromotionType) {
-      ret = getBasicInstantiationType(st, formalType);
+      ret = getBasicInstantiationType(st->getValType(), formalType);
     }
   }
 
@@ -458,7 +445,7 @@ static Type* getBasicInstantiationType(Type* actualType, Type* formalType) {
   }
 
   if (isManagedPtrType(actualType)) {
-    Type* actualBaseType = actualType->getField("t")->type;
+    Type* actualBaseType = getManagedPtrBorrowType(actualType);
     if (canInstantiate(actualBaseType, formalType))
       return actualBaseType;
   }
@@ -543,54 +530,6 @@ static bool looksLikeCopyInit(ResolutionCandidate* rc) {
   }
 
   return retval;
-}
-
-static bool isCandidateInit(ResolutionCandidate* res, CallInfo& info) {
-  bool retval = false;
-
-  AggregateType* ft = toAggregateType(res->fn->_this->getValType());
-  AggregateType* at = toAggregateType(info.call->get(2)->getValType());
-
-  if (ft == at) {
-    retval = true;
-  } else if (ft->getRootInstantiation() == at->getRootInstantiation()) {
-    retval = true;
-  }
-
-  return retval;
-}
-
-static bool isCandidateNew(ResolutionCandidate* res, CallInfo& info) {
-  bool retval = false;
-
-  AggregateType* ft = toAggregateType(res->fn->getFormal(1)->getValType());
-  AggregateType* at = toAggregateType(info.call->get(1)->getValType());
-
-  if (ft == at) {
-    retval = true;
-  } else if (ft->getRootInstantiation() == at->getRootInstantiation()) {
-    retval = true;
-  }
-
-  return retval;
-}
-
-static bool isCandidateFn(ResolutionCandidate* res, CallInfo& info) {
-  // Exclude initializers on other types before we attempt to resolve the
-  // signature.
-  //
-  // TODO: Expand this check for all methods
-  if (info.call->numActuals() >= 2 &&
-      res->fn->isInitializer() &&
-      isCandidateInit(res, info) == false) {
-    return false;
-  } else if (info.call->numActuals() >= 1 &&
-             res->fn->hasFlag(FLAG_NEW_WRAPPER) &&
-             isCandidateNew(res, info) == false) {
-    return false;
-  }
-
-  return true;
 }
 
 /************************************* | **************************************

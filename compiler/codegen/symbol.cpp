@@ -38,6 +38,7 @@
 #include "intlimits.h"
 #include "iterator.h"
 #include "LayeredValueTable.h"
+#include "library.h"
 #include "llvmDebug.h"
 #include "llvmExtractIR.h"
 #include "llvmUtil.h"
@@ -70,10 +71,12 @@
 *                                                                   *
 ********************************* | ********************************/
 
-char llvmPrintIrName[FUNC_NAME_MAX+1] = "";
-char llvmPrintIrStage[FUNC_NAME_MAX+1] = "";
-const char *llvmPrintIrCName;
+// these are sets of astrs
+static std::set<const char*> llvmPrintIrNames;
+static std::set<const char*> llvmPrintIrCNames;
+
 llvmStageNum_t llvmPrintIrStageNum = llvmStageNum::NOPRINT;
+
 const char* llvmStageName[llvmStageNum::LAST] = {
   "", //llvmStageNum::NOPRINT
   "none", //llvmStageNum::NONE
@@ -104,16 +107,103 @@ llvmStageNum_t llvmStageNumFromLlvmStageName(const char* stageName) {
   return llvmStageNum::NOPRINT;
 }
 
+void addNameToPrintLlvmIr(const char* name) {
+  llvmPrintIrNames.insert(astr(name));
+}
+void addCNameToPrintLlvmIr(const char* name) {
+  llvmPrintIrCNames.insert(astr(name));
+}
+
+bool shouldLlvmPrintIrName(const char* name) {
+  if (llvmPrintIrNames.empty())
+    return false;
+
+  return llvmPrintIrNames.count(astr(name));
+}
+
+bool shouldLlvmPrintIrCName(const char* name) {
+  if (llvmPrintIrNames.empty())
+    return false;
+
+  return llvmPrintIrCNames.count(astr(name));
+}
+
+bool shouldLlvmPrintIrFn(FnSymbol* fn) {
+  return shouldLlvmPrintIrName(fn->name) || shouldLlvmPrintIrCName(fn->cname);
+}
+
 #ifdef HAVE_LLVM
-void printLlvmIr(llvm::Function *func, llvmStageNum_t numStage) {
+
+static std::set<const llvm::GlobalValue*> funcsToPrint;
+static llvmStageNum_t partlyPrintedStage = llvmStageNum::NOPRINT;
+
+void printLlvmIr(const char* name, llvm::Function *func, llvmStageNum_t numStage) {
   if(func) {
-    std::cout << "; " << "LLVM IR representation of " << llvmPrintIrName
+    std::cout << "; " << "LLVM IR representation of " << name
               << " function after " << llvmStageNameFromLlvmStageNum(numStage)
               << " optimization stage\n" << std::flush;
-    extractAndPrintFunctionLLVM(func);
+    if (!(numStage == llvmStageNum::BASIC ||
+          numStage == llvmStageNum::FULL)) {
+      // Basic and full can happen module-at-a-time due to current
+      // compiler structure. For the others, we can't save the Function*,
+      // so just print out multiple modules if there are multiple functions.
+      std::set<const llvm::GlobalValue*> funcs;
+      funcs.insert(func);
+      extractAndPrintFunctionsLLVM(&funcs);
+    } else {
+      funcsToPrint.insert(func);
+      partlyPrintedStage = numStage;
+    }
   }
 }
 #endif
+
+void completePrintLlvmIrStage(llvmStageNum_t numStage) {
+#ifdef HAVE_LLVM
+  extractAndPrintFunctionsLLVM(&funcsToPrint);
+  partlyPrintedStage = llvmStageNum_t::NOPRINT;
+  funcsToPrint.clear();
+#endif
+}
+
+
+void preparePrintLlvmIrForCodegen() {
+  if (llvmPrintIrNames.empty() && llvmPrintIrCNames.empty())
+    return;
+  if (llvmPrintIrStageNum == llvmStageNum::NOPRINT)
+    return;
+
+  // Gather the cnames for the functions in names
+  forv_Vec(FnSymbol, fn, gFnSymbols) {
+    if (shouldLlvmPrintIrFn(fn)) {
+      addCNameToPrintLlvmIr(fn->cname);
+    }
+  }
+
+  // Extend cnames with the cnames of task functions
+  bool changed;
+  do {
+    changed = false;
+    forv_Vec(FnSymbol, fn, gFnSymbols) {
+      if (shouldLlvmPrintIrCName(fn->cname)) {
+        std::vector<CallExpr*> calls;
+        collectFnCalls(fn, calls);
+
+        for_vector(CallExpr, call, calls) {
+          if (FnSymbol* calledFn = call->resolvedFunction()) {
+            if (isTaskFun(calledFn) ||
+                calledFn->hasFlag(FLAG_COBEGIN_OR_COFORALL_BLOCK)) {
+              if (!shouldLlvmPrintIrFn(calledFn)) {
+                addCNameToPrintLlvmIr(calledFn->cname);
+                changed = true;
+              }
+            }
+          }
+        }
+      }
+    }
+  } while (changed);
+}
 
 /******************************** | *********************************
 *                                                                   *
@@ -545,7 +635,7 @@ GenRet VarSymbol::codegen() {
 
 void VarSymbol::codegenDefC(bool global, bool isHeader) {
   GenInfo* info = gGenInfo;
-  if (this->hasFlag(FLAG_EXTERN))
+  if (this->hasFlag(FLAG_EXTERN) && !this->hasFlag(FLAG_GENERATE_SIGNATURE))
     return;
 
   if (type == dtVoid)
@@ -577,7 +667,8 @@ void VarSymbol::codegenDefC(bool global, bool isHeader) {
   //
   std::string str;
 
-  if(fIncrementalCompilation) {
+  if(fIncrementalCompilation || (this->hasFlag(FLAG_EXTERN) &&
+                                 this->hasFlag(FLAG_GENERATE_SIGNATURE))) {
     bool addExtern =  global && isHeader;
     str = (addExtern ? "extern " : "") + typestr + " " + cname;
   } else {
@@ -872,6 +963,135 @@ GenRet ArgSymbol::codegen() {
   //ret.chplType = this->type;
 
   return ret;
+}
+
+static std::string getFortranTypeName(Type* type, Symbol* sym) {
+  static std::set<Symbol*> warnedSymbols;
+  std::string typeName = fortranTypeNames[type->symbol];
+
+  if (typeName.empty()) {
+    if (warnedSymbols.count(sym) == 0) {
+      // TODO: Maybe issue an error instead?
+      USR_WARN(sym->defPoint, "Unknown Fortran type generating interface for C type: %s", type->symbol->cname);
+      warnedSymbols.insert(sym);
+    }
+    return type->symbol->cname;
+  } else {
+    return typeName;
+  }
+}
+
+static std::string getFortranKindName(Type* type, Symbol* sym) {
+  static std::set<Symbol*> warnedSymbols;
+  std::string kindName = fortranKindNames[type->symbol];
+
+  if (kindName.empty()) {
+    if (warnedSymbols.count(sym) == 0) {
+      // TODO: Maybe issue an error instead?
+      USR_WARN(sym->defPoint, "Unknown Fortran KIND generating interface for C type: %s", type->symbol->cname);
+      warnedSymbols.insert(sym);
+    }
+    return type->symbol->cname;
+  } else {
+    return kindName;
+  }
+}
+
+// If there is a known .pxd file translation for this type, use that.
+// Otherwise, use the normal cname
+static std::string getPythonTypeName(Type* type, PythonFileType pxd) {
+  std::pair<std::string, std::string> tNames = pythonNames[type->symbol];
+  if (pxd == C_PXD && tNames.first != "") {
+    return tNames.first;
+  } else if (pxd == PYTHON_PYX && tNames.second != "") {
+    return tNames.second;
+  } else if (pxd == C_PYX && (tNames.second != "" || tNames.first != "")) {
+    std::string res = tNames.second;
+    if (strncmp(res.c_str(), "numpy", strlen("numpy")) == 0) {
+      res += "_t";
+    } else {
+      res = getPythonTypeName(type, C_PXD);
+    }
+    return res;
+  } else {
+    return transformTypeForPointer(type);
+  }
+}
+
+std::string ArgSymbol::getPythonType(PythonFileType pxd) {
+  Type* t = getArgSymbolCodegenType(this);
+
+  if (t->symbol->hasFlag(FLAG_REF) &&
+      t->getValType() == dtExternalArray &&
+      (pxd == PYTHON_PYX || pxd == C_PYX)
+      && exportedArrayElementType[this] != NULL) {
+    // Allow python declarations to accept anything iterable to translate to
+    // an array, instead of limiting to a specific Python type
+    return "";
+  } else {
+    return getPythonTypeName(t, pxd) + " ";
+  }
+}
+
+std::string ArgSymbol::getPythonDefaultValue() {
+  std::string defaultVal = exportedDefaultValues[this];
+  if (defaultVal != "") {
+    return "= " + defaultVal;
+  } else {
+    return "";
+  }
+}
+
+// Some Python type instances need to be translated into C level type instances.
+// Generate code to perform that translation when this is the case
+std::string ArgSymbol::getPythonArgTranslation() {
+  Type* t = getArgSymbolCodegenType(this);
+
+  if (t == dtStringC) {
+    std::string res = "\tcdef const char* chpl_";
+    res += cname;
+    res += " = ";
+    res += cname;
+    res += "\n";
+    return res;
+  } else if (t->symbol->hasFlag(FLAG_REF) &&
+             t->getValType() == dtExternalArray) {
+    // Handle arrays
+    if (Symbol* eltType = exportedArrayElementType[this]) {
+      // The element type will be recorded in the exportedArrayElementType map
+      // if this arg's type was originally a Chapel array instead of explicitly
+      // an external array.  If we have the element type, that means we need to
+      // do a translation in the python wrapper.
+      std::string typeStr = getPythonTypeName(eltType->type, PYTHON_PYX);
+      std::string typeStrCDefs = getPythonTypeName(eltType->type, C_PYX);
+
+      // Create the memory needed to store the contents of what was passed to us
+      // E.g. cdef chpl_external_array chpl_foo =
+      //          chpl_make_external_array(sizeof(element type), len(foo))
+      std::string res = "\tcdef chpl_external_array chpl_";
+      res += cname;
+      res += " = chpl_make_external_array(sizeof(";
+      res += typeStrCDefs;
+      res += "), len(";
+      res += cname;
+      res += "))\n";
+
+      // Copy the contents over.
+      // E.g. for i in range(len(foo)):
+      //         (<element type*>chpl_foo.elts)[i] = foo[i]
+      res += "\tfor i in range(len(";
+      res += cname;
+      res += ")):\n";
+      res += "\t\t(<" + typeStrCDefs + "*>chpl_";
+      res += cname;
+      res += ".elts)[i] = ";
+      res += cname;
+      res += "[i]\n";
+
+      return res;
+    }
+  }
+  return "";
 }
 
 /******************************** | *********************************
@@ -1375,7 +1595,7 @@ GenRet FnSymbol::codegenCast(GenRet fnPtr) {
 void FnSymbol::codegenPrototype() {
   GenInfo *info = gGenInfo;
 
-  if (hasFlag(FLAG_EXTERN))       return;
+  if (hasFlag(FLAG_EXTERN) && !hasFlag(FLAG_GENERATE_SIGNATURE)) return;
   if (hasFlag(FLAG_NO_PROTOTYPE)) return;
   if (hasFlag(FLAG_NO_CODEGEN))   return;
 
@@ -1498,13 +1718,18 @@ void FnSymbol::codegenDef() {
 #ifdef HAVE_LLVM
     func = getFunctionLLVM(cname);
 
-    if(llvmPrintIrStageNum != llvmStageNum::NOPRINT
-            && strcmp(llvmPrintIrName, name) == 0) {
+    // Mark functions to dump as no-inline so they actually exist
+    // after optimization
+    if(llvmPrintIrStageNum != llvmStageNum::NOPRINT &&
+       shouldLlvmPrintIrFn(this)) {
         func->addFnAttr(llvm::Attribute::NoInline);
-        llvmPrintIrCName = cname;
     }
+    // Also mark no-inline if the flag was set
     if (fNoInline)
       func->addFnAttr(llvm::Attribute::NoInline);
+
+    if (this->hasFlag(FLAG_LLVM_READNONE))
+      func->addFnAttr(llvm::Attribute::ReadNone);
 
     llvm::BasicBlock *block =
       llvm::BasicBlock::Create(info->module->getContext(), "entry", func);
@@ -1546,6 +1771,19 @@ void FnSymbol::codegenDef() {
       ArgNo++;
     }
 
+    // if --gen-ids is enabled, add metadata mapping the
+    // function back to Chapel AST id
+    if (fGenIDS) {
+      llvm::LLVMContext& ctx = info->llvmContext;
+
+      llvm::Type *int64Ty = llvm::Type::getInt64Ty(ctx);
+      llvm::Constant* c = llvm::ConstantInt::get(int64Ty, this->id);
+      llvm::ConstantAsMetadata* aid = llvm::ConstantAsMetadata::get(c);
+
+      llvm::MDNode* node = llvm::MDNode::get(ctx, aid);
+
+      func->setMetadata("chpl.ast.id", node);
+    }
 #endif
   }
 
@@ -1583,9 +1821,9 @@ void FnSymbol::codegenDef() {
     }
 
     if((llvmPrintIrStageNum == llvmStageNum::NONE ||
-        llvmPrintIrStageNum == llvmStageNum::EVERY)
-            && strcmp(llvmPrintIrName, name) == 0)
-        printLlvmIr(func, llvmStageNum::NONE);
+        llvmPrintIrStageNum == llvmStageNum::EVERY) &&
+       shouldLlvmPrintIrFn(this))
+        printLlvmIr(name, func, llvmStageNum::NONE);
 
     // Now run the optimizations on that function.
     // (we handle checking fFastFlag, etc, when we set up FPM_postgen)
@@ -1595,10 +1833,6 @@ void FnSymbol::codegenDef() {
     // (note, in particular, the default pass manager's
     //  populateFunctionPassManager does not include vectorization)
     info->FPM_postgen->run(*func);
-    if((llvmPrintIrStageNum == llvmStageNum::BASIC ||
-        llvmPrintIrStageNum == llvmStageNum::EVERY)
-            && strcmp(llvmPrintIrName, name) == 0)
-        printLlvmIr(func, llvmStageNum::BASIC);
 #endif
   }
 
@@ -1627,6 +1861,282 @@ GenRet FnSymbol::codegen() {
 #endif
   }
   return ret;
+}
+
+void FnSymbol::codegenFortran(int indent) {
+  GenInfo *info = gGenInfo;
+  int beginIndent = indent;
+
+  if (!hasFlag(FLAG_EXPORT)) return;
+  if (hasFlag(FLAG_NO_PROTOTYPE)) return;
+  if (hasFlag(FLAG_NO_CODEGEN)) return;
+
+  if (info->cfile) {
+    FILE* outfile = info->cfile;
+    if (fGenIDS)
+      fprintf(outfile, "%*s! %d", indent, "", this->id);
+    const char* subOrProc = retType != dtVoid ? "function" : "subroutine";
+    fprintf(outfile, "%*s%s %s(", indent, "", subOrProc, this->cname);
+    bool first = true;
+
+    // print the list of formal names
+    for_formals(formal, this) {
+      if (formal->hasFlag(FLAG_NO_CODEGEN))
+        continue;
+      if (!first) fprintf(outfile, ", ");
+
+      // My Fortran compiler doesn't like names with leading underscores
+      if (formal->cname[0] == '_')
+        fprintf(outfile, "chpl");
+
+      fprintf(outfile, "%s", formal->cname);
+      first = false;
+    }
+    fprintf(outfile, ") bind(C, name=\"%s\")\n", this->cname);
+
+    indent += 2;
+    // build a unique set of type kinds to import
+    std::set<std::string> uniqueKindNames;
+    bool foundUnsignedInt = false;
+    for_formals(formal, this) {
+      if (formal->hasFlag(FLAG_NO_CODEGEN))
+        continue;
+      uniqueKindNames.insert(getFortranKindName(formal->type, formal));
+      if (is_uint_type(formal->type)) {
+        foundUnsignedInt = true;
+      }
+    }
+    if (retType != dtVoid) {
+      uniqueKindNames.insert(getFortranKindName(retType, this));
+      if (is_uint_type(retType)) {
+        foundUnsignedInt = true;
+      }
+    }
+
+    if (foundUnsignedInt) {
+      USR_WARN(this->defPoint, "Fortran does not support unsigned integers. Using signed integer instead.");
+    }
+
+    // print "import <c_type_name>" for each required type
+    // Don't import anything for '_ref_CFI_cdesc_t' which is the Fortran
+    // array type for array interoperability.
+    if (!uniqueKindNames.empty() &&
+        (uniqueKindNames.size() > 1 ||
+         uniqueKindNames.count("_ref_CFI_cdesc_t") == 0)) {
+      fprintf(outfile, "%*simport ", indent, "");
+      first = true;
+      for (std::set<std::string>::iterator kindName = uniqueKindNames.begin();
+           kindName != uniqueKindNames.end(); ++kindName) {
+        if (!strcmp(kindName->c_str(), "_ref_CFI_cdesc_t")) continue;
+        if (!first) {
+          fprintf(outfile, ", ");
+        }
+        fprintf(outfile, "%s", kindName->c_str());
+        first = false;
+      }
+      fprintf(outfile, "\n");
+    }
+
+    // print type declarations for each formal
+    for_formals(formal, this) {
+      if (formal->hasFlag(FLAG_NO_CODEGEN))
+        continue;
+      const char* prefix = formal->cname[0] == '_' ? "chpl" : "";
+      const bool isRef = formal->intent & INTENT_FLAG_REF;
+      const char* valueString = isRef ? "" : ", value";
+      std::string typeName = getFortranTypeName(formal->type, formal);
+      std::string kindName = getFortranKindName(formal->type, formal);
+
+      // declare arrays specially instead of just using the record type
+      if (kindName == "_ref_CFI_cdesc_t") {
+        fprintf(outfile, "%*sTYPE(*) :: %s(..)\n", indent, "", formal->cname);
+      } else {
+        fprintf(outfile, "%*s%s(kind=%s)%s :: %s%s\n", indent, "",
+                typeName.c_str(), kindName.c_str(),
+                valueString, prefix, formal->cname);
+      }
+    }
+
+    // print type declaration for the return type
+    if (retType != dtVoid) {
+      fprintf(outfile, "%*s%s(kind=%s) :: %s\n", indent, "", getFortranTypeName(retType, this).c_str(), getFortranKindName(retType, this).c_str(), this->cname);
+    }
+    indent -= 2;
+    fprintf(outfile, "%*send %s %s\n\n", indent, "", subOrProc, this->cname);
+  } else {
+    INT_FATAL("no file named to generate Fortran interface into");
+  }
+  INT_ASSERT(indent == beginIndent);
+}
+
+// Supports the creation of a python module with --library-python
+void FnSymbol::codegenPython(PythonFileType pxd) {
+  GenInfo *info = gGenInfo;
+
+  if (!hasFlag(FLAG_EXPORT)) return;
+  if (hasFlag(FLAG_NO_PROTOTYPE)) return;
+  if (hasFlag(FLAG_NO_CODEGEN)) return;
+
+  // Should I add the break-on-codegen-id stuff here?
+
+  if (info->cfile) {
+    FILE* outfile = info->cfile;
+    if (fGenIDS)
+      fprintf(outfile, "%s", idCommentTemp(this));
+
+    if (pxd == C_PXD) {
+      fprintf(outfile, "\t%s;\n", codegenPXDType().c.c_str());
+    } else if (pxd == PYTHON_PYX) {
+      fprintf(outfile, "\n%s", codegenPYXType().c.c_str());
+    } else {
+      INT_FATAL("python file type not handled");
+    }
+  } else {
+    // TODO: LLVM stuff
+  }
+}
+
+// Supports the creation of a python module with --library-python
+GenRet FnSymbol::codegenPXDType() {
+  GenInfo* info = gGenInfo;
+  GenRet ret;
+
+  ret.chplType = typeInfo();
+
+  if (info->cfile) {
+    // Cast to right function type.
+    std::string str;
+
+    std::string retString = getPythonTypeName(retType, C_PXD);
+    str += retString.c_str();
+    str += " ";
+    str += cname;
+    str += "(";
+
+    if (numFormals() != 0) {
+      int count = 0;
+      for_formals(formal, this) {
+        if (formal->hasFlag(FLAG_NO_CODEGEN))
+          continue; // do not print locale argument, end count, dummy class
+        if (count > 0)
+          str += ", ";
+        str += formal->getPythonType(C_PXD);
+        str += formal->cname;
+        if (fGenIDS) {
+          str += " ";
+          str += idCommentTemp(formal);
+        }
+        count++;
+      }
+    } // pxd files do not take void as an argument list, just close the parens
+    str += ")";
+    ret.c = str;
+
+  } else {
+    // TODO: LLVM stuff
+  }
+
+  return ret;
+}
+
+// Supports the creation of a python module with --library-python
+GenRet FnSymbol::codegenPYXType() {
+  GenRet ret;
+
+  ret.chplType = typeInfo();
+
+  // Function header
+  std::string header = "def ";
+  header += cname;
+  header += "(";
+
+  // Translation of any arguments with Python-specific types
+  std::string argTranslate = "";
+  // Call to the wrapped function
+  std::string funcCall = "\t";
+  // Return statement, if applicable
+  std::string returnStmt = "";
+  if (retType != dtVoid) {
+    if (retType == dtExternalArray &&
+        exportedArrayElementType[this] != NULL) {
+      funcCall += "cdef chpl_external_array ret_arr = ";
+      returnStmt += getPythonArrayReturnStmts();
+    } else {
+      funcCall += "ret = ";
+    }
+    returnStmt += "\treturn ret\n";
+  }
+  funcCall += "chpl_";
+  funcCall += cname;
+  funcCall += "(";
+
+  if (numFormals() != 0) {
+    int count = 0;
+    for_formals(formal, this) {
+      if (formal->hasFlag(FLAG_NO_CODEGEN))
+        continue; // do not print locale argument, end count, dummy class
+      if (count > 0) {
+        header += ", ";
+        funcCall += ", ";
+      }
+
+      std::string argType = formal->getPythonType(C_PYX);
+      header += argType;
+      header += formal->cname;
+      if (fGenIDS) {
+        header += " ";
+        header += idCommentTemp(formal);
+      }
+
+      header += formal->getPythonDefaultValue();
+
+      std::string curArgTranslate = formal->getPythonArgTranslation();
+      if (curArgTranslate != "") {
+        argTranslate += curArgTranslate;
+        if (argType == "") {
+          // Happens when the argument type is an array
+          // We need to send in the wrapper we created by reference
+          funcCall += "&";
+          // And we need to clean it up when we are done with it
+          std::string oldRetStmt = returnStmt;
+          returnStmt = "\tchpl_free_external_array(chpl_";
+          returnStmt += formal->cname;
+          returnStmt += ")\n" + oldRetStmt;
+        }
+        funcCall += "chpl_";
+      }
+
+      funcCall += formal->cname;
+      count++;
+    }
+
+  } // pyx files do not take void as an argument list, just close the parens
+  header += "):\n";
+  funcCall += ")\n";
+  ret.c = header + argTranslate + funcCall + returnStmt;
+
+  return ret;
+}
+
+std::string FnSymbol::getPythonArrayReturnStmts() {
+  INT_ASSERT(retType == dtExternalArray);
+  Symbol* eltType = exportedArrayElementType[this];
+  std::string typeStr = getPythonTypeName(eltType->type, PYTHON_PYX);
+  std::string typeStrCDefs = getPythonTypeName(eltType->type, C_PYX);
+  // Create the numpy array to return
+  // E.g. cdef numpy.ndarray [C element type, ndim=1] ret =
+  //          numpy.zeros(shape = ret_arr.size, dtype = Python element type)
+  std::string res = "\tcdef numpy.ndarray [" + typeStrCDefs + ", ndim=1] ret";
+  res += " = numpy.zeros(shape = ret_arr.size, dtype = " + typeStr + ")\n";
+
+  // Populate it with the contents we return (which translated C types into
+  // Python types)
+  res += "\tfor i in range(ret_arr.size):\n";
+  res += "\t\tret[i] = (<" + typeStrCDefs + "*>ret_arr.elts)[i]\n";
+
+  // Free the returned array now that its contents have been stored elsewhere
+  res += "\tchpl_free_external_array(ret_arr)\n";
+  return res;
 }
 
 /******************************** | *********************************

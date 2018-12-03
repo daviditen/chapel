@@ -4,14 +4,9 @@ import os
 import sys
 
 from distutils.spawn import find_executable
-from sys import stderr, stdout
-
-chplenv_dir = os.path.dirname(__file__)
-sys.path.insert(0, os.path.abspath(chplenv_dir))
 
 import chpl_platform, overrides
 from utils import error, memoize
-
 
 
 @memoize
@@ -43,7 +38,7 @@ def get(flag='host', llvm_mode='default'):
         else:
             subcompiler = os.environ.get('PE_ENV', 'none')
             if subcompiler == 'none':
-                stderr.write("Warning: Compiling on {0} without a PrgEnv loaded\n".format(platform_val))
+                sys.stderr.write("Warning: Compiling on {0} without a PrgEnv loaded\n".format(platform_val))
             compiler_val = "cray-prgenv-{0}".format(subcompiler.lower())
     elif chpl_platform.is_cross_compiling():
         if flag == 'host':
@@ -58,8 +53,6 @@ def get(flag='host', llvm_mode='default'):
             if chpl_platform.get('host') == platform_val:
                 compiler_val = get('host')
         elif platform_val.startswith('pwr'):
-            compiler_val = 'ibm'
-        elif platform_val == 'marenostrum':
             compiler_val = 'ibm'
         elif platform_val == 'darwin' or platform_val == 'freebsd':
             if find_executable('clang'):
@@ -80,7 +73,7 @@ def _main():
     (options, args) = parser.parse_args()
 
     compiler_val = get(options.flag)
-    stdout.write("{0}\n".format(compiler_val))
+    sys.stdout.write("{0}\n".format(compiler_val))
 
 
 if __name__ == '__main__':

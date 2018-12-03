@@ -300,7 +300,6 @@ class StencilDom: BaseRectangularDom {
 // NeighDom will be a rectangular domain where each dimension is the range
 // -1..1
 //
-pragma "use default init"
 class LocStencilDom {
   param rank: int;
   type idxType;
@@ -324,7 +323,6 @@ class LocStencilDom {
 // locArr: a non-distributed array of local array classes
 // myLocArr: optimized reference to here's local array class (or nil)
 //
-pragma "use default init"
 class StencilArr: BaseRectangularArr {
   param ignoreFluff: bool;
   var doRADOpt: bool = defaultDoRADOpt;
@@ -345,7 +343,6 @@ class StencilArr: BaseRectangularArr {
 // locDom: reference to local domain class
 // myElems: a non-distributed array of local elements
 //
-pragma "use default init"
 class LocStencilArr {
   type eltType;
   param rank: int;
@@ -355,8 +352,7 @@ class LocStencilArr {
   var locRAD: unmanaged LocRADCache(eltType, rank, idxType, stridable); // non-nil if doRADOpt=true
   pragma "local field"
   var myElems: [locDom.myFluff] eltType;
-  var locRADLock: atomicbool; // This will only be accessed locally
-                              // force the use of processor atomics
+  var locRADLock: chpl__processorAtomicType(bool); // only accessed locally
 
   // TODO: use void type when packed update is disabled
   var recvBufs, sendBufs : [locDom.NeighDom] [locDom.bufDom] eltType;
@@ -481,7 +477,7 @@ proc Stencil.dsiClone() {
                    ignoreFluff=this.ignoreFluff);
 }
 
-proc Stencil.dsiDestroyDist() {
+override proc Stencil.dsiDestroyDist() {
   coforall ld in locDist do {
     on ld do
       delete ld;
@@ -499,8 +495,8 @@ proc Stencil.dsiDisplayRepresentation() {
     writeln("locDist[", tli, "].myChunk = ", locDist[tli].myChunk);
 }
 
-proc Stencil.dsiNewRectangularDom(param rank: int, type idxType,
-                                  param stridable: bool, inds) {
+override proc Stencil.dsiNewRectangularDom(param rank: int, type idxType,
+                                           param stridable: bool, inds) {
   if idxType != this.idxType then
     compilerError("Stencil domain index type does not match distribution's");
   if rank != this.rank then
@@ -633,7 +629,7 @@ proc StencilDom.init(param rank : int,
   this.periodic = periodic;
 }
 
-proc StencilDom.dsiMyDist() return dist;
+override proc StencilDom.dsiMyDist() return dist;
 
 proc StencilDom.dsiDisplayRepresentation() {
   writeln("whole = ", whole);
@@ -709,9 +705,8 @@ iter StencilDom.these(param tag: iterKind) where tag == iterKind.leader {
     for param i in 1..tmpStencil.rank do
       locOffset(i) = tmpStencil.dim(i).first/tmpStencil.dim(i).stride:strType;
     // Forward to defaultRectangular
-    for followThis in tmpStencil._value.these(iterKind.leader, maxTasks,
-                                            myIgnoreRunning, minSize,
-                                            locOffset) do
+    for followThis in tmpStencil.these(iterKind.leader, maxTasks,
+                                       myIgnoreRunning, minSize, locOffset) do
       yield followThis;
   }
 }
@@ -873,8 +868,16 @@ proc StencilDom.setup() {
 
           // if L is a tuple of zeroes then we are in the center, which needs
           // no updating.
-          if !isZeroTuple(L) {
-            const to = chpl__tuplify(L);
+          const to = chpl__tuplify(L);
+
+          // If halo(i) is zero then there cannot be any fluff along that
+          // dimension, meaning that neigh(i) cannot be '1' or '-1'. If neigh(i)
+          // is not zero, then we should skip the computation of send/recv
+          // slices, which will prevent updateFluff from attempting to use
+          // those slices later.
+          var skipNeigh = || reduce for (f,t) in zip(fluff, to) do (f == 0 && t != 0);
+
+          if !isZeroTuple(to) && !skipNeigh {
             var dr : rank*whole.dim(1).type;
             for i in 1..rank {
               const fa = fluff(i) * abstr(i);
@@ -894,9 +897,9 @@ proc StencilDom.setup() {
 
             // destination indices in the fluff region
             recvD = {(...dr)};
-            assert(wholeFluff.member(recvD.first) && wholeFluff.member(recvD.last), "StencilDist: Error computing destination slice.");
+            assert(wholeFluff.contains(recvD.first) && wholeFluff.contains(recvD.last), "StencilDist: Error computing destination slice.");
 
-            if whole.member(recvD.first) && whole.member(recvD.last) {
+            if whole.contains(recvD.first) && whole.contains(recvD.last) {
               // sending to an adjacent locale
               recvS = recvD;
               N = chpl__tuplify(dist.targetLocsIdx(recvS.first));
@@ -914,8 +917,8 @@ proc StencilDom.setup() {
               recvS = recvD.translate(offset);
               N = chpl__tuplify(dist.targetLocsIdx(recvS.first));
 
-              assert(whole.member(recvS.first) && whole.member(recvS.last), "StencilDist: Failure to compute Src slice.");
-              assert(dist.targetLocDom.member(N), "StencilDist: Error computing neighbor index.");
+              assert(whole.contains(recvS.first) && whole.contains(recvS.last), "StencilDist: Failure to compute Src slice.");
+              assert(dist.targetLocDom.contains(N), "StencilDist: Error computing neighbor index.");
             } else {
               // No communication needed in this direction
               assert(recvS.size == 0);
@@ -958,7 +961,7 @@ proc StencilDom.setup() {
         forall (recvS, recvD, sendS, sendD, N, L) in zip(myLocDom.recvSrc, myLocDom.recvDest,
                                                          myLocDom.sendSrc, myLocDom.sendDest,
                                                          myLocDom.Neighs, ND) {
-          if !zeroTuple(L) && recvS.size != 0 {
+          if !isZeroTuple(L) && recvS.size != 0 {
             var other = -1 * L;
 
             proc checker(me, myDom, them, themDom) {
@@ -975,7 +978,7 @@ proc StencilDom.setup() {
   }
 }
 
-proc StencilDom.dsiDestroyDom() {
+override proc StencilDom.dsiDestroyDom() {
   coforall localeIdx in dist.targetLocDom {
     on locDoms(localeIdx) do
       delete locDoms(localeIdx);
@@ -983,7 +986,7 @@ proc StencilDom.dsiDestroyDom() {
 }
 
 proc StencilDom.dsiMember(i) {
-  return wholeFluff.member(i);
+  return wholeFluff.contains(i);
 }
 
 proc StencilDom.dsiIndexOrder(i) {
@@ -993,7 +996,7 @@ proc StencilDom.dsiIndexOrder(i) {
 //
 // Added as a performance stopgap to avoid returning a domain
 //
-proc LocStencilDom.member(i) return myBlock.member(i);
+proc LocStencilDom.contains(i) return myBlock.contains(i);
 
 proc StencilArr.dsiDisplayRepresentation() {
   for tli in dom.dist.targetLocDom {
@@ -1003,7 +1006,7 @@ proc StencilArr.dsiDisplayRepresentation() {
   }
 }
 
-proc StencilArr.dsiGetBaseDom() return dom;
+override proc StencilArr.dsiGetBaseDom() return dom;
 
 //
 // NOTE: Each locale's myElems array must be initialized prior to setting up
@@ -1043,7 +1046,7 @@ proc StencilArr.setup() {
   if doRADOpt && disableStencilLazyRAD then setupRADOpt();
 }
 
-proc StencilArr.dsiDestroyArr() {
+override proc StencilArr.dsiDestroyArr() {
   coforall localeIdx in dom.dist.targetLocDom {
     on locArr(localeIdx) {
       if !ignoreFluff then
@@ -1070,11 +1073,11 @@ proc StencilArr.do_dsiAccess(param setter, const in idx: rank*idxType) ref {
     if myLocArr != nil {
       if setter || this.ignoreFluff {
         // A write: return from actual data and not fluff
-        if myLocArr.locDom.member(idx) then return myLocArr.this(idx);
+        if myLocArr.locDom.contains(idx) then return myLocArr.this(idx);
       } else {
         // A read: return from fluff if possible
         // If there is no fluff, then myFluff == myBlock
-        if myLocArr.locDom.myFluff.member(idx) then return myLocArr.this(idx);
+        if myLocArr.locDom.myFluff.contains(idx) then return myLocArr.this(idx);
       }
     }
   }
@@ -1087,7 +1090,7 @@ proc StencilArr.nonLocalAccess(i: rank*idxType) ref {
   if doRADOpt {
     if myLocArr {
       if boundsChecking {
-        if !dom.wholeFluff.member(i) {
+        if !dom.wholeFluff.contains(i) {
           halt("array index out of bounds: ", i);
         }
       }
@@ -1339,7 +1342,7 @@ iter StencilArr.dsiBoundaries() {
       const low = dom.dist.targetLocDom.low;
       const high = dom.dist.targetLocDom.high;
 
-      if (!dom.dist.targetLocDom.member(target)) {
+      if (!dom.dist.targetLocDom.contains(target)) {
         var translated : target.type;
         for param r in 1..LSA.rank {
           if target(r) < low(r) {
@@ -1389,7 +1392,7 @@ iter StencilArr.dsiBoundaries(param tag : iterKind) where tag == iterKind.standa
         //
 
         // If the target locale is outside the grid, it's a boundary chunk
-        if (!dom.dist.targetLocDom.member(target)) {
+        if (!dom.dist.targetLocDom.contains(target)) {
           var translated : target.type;
           for param r in 1..LSA.rank {
             if target(r) < low(r) {
@@ -1591,7 +1594,7 @@ proc StencilArr.updateFluff() {
   }
 }
 
-proc StencilArr.dsiReallocate(bounds:rank*range(idxType,BoundedRangeType.bounded,stridable))
+override proc StencilArr.dsiReallocate(bounds:rank*range(idxType,BoundedRangeType.bounded,stridable))
 {
   //
   // For the default rectangular array, this function changes the data
@@ -1607,7 +1610,7 @@ proc StencilArr.dsiReallocate(bounds:rank*range(idxType,BoundedRangeType.bounded
 }
 
 // Call this *after* the domain has been reallocated
-proc StencilArr.dsiPostReallocate() {
+override proc StencilArr.dsiPostReallocate() {
   if doRADOpt then setupRADOpt();
 }
 

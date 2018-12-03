@@ -21,14 +21,14 @@ use Search;
 // implementation
 iter DefaultRectangularDom.dsiPartialThese(param onlyDim, otherIdx) {
 
-  if !dsiPartialDomain(onlyDim).member(otherIdx) then return;
+  if !dsiPartialDomain(onlyDim).contains(otherIdx) then return;
   for i in ranges(onlyDim) do yield i;
 }
 
 iter DefaultRectangularDom.dsiPartialThese(param onlyDim, otherIdx,
     param tag: iterKind) where tag == iterKind.leader {
 
-    if !dsiPartialDomain(onlyDim).member(otherIdx) then return;
+    if !dsiPartialDomain(onlyDim).contains(otherIdx) then return;
     for i in ranges(onlyDim).these(tag) do yield i;
   }
 
@@ -43,7 +43,7 @@ iter DefaultRectangularDom.dsiPartialThese(param onlyDim, otherIdx,
     param tag: iterKind) where tag == iterKind.standalone &&
     __primitive("method call resolves", ranges(onlyDim), "these", tag) {
 
-    if !dsiPartialDomain(onlyDim).member(otherIdx) then return;
+    if !dsiPartialDomain(onlyDim).contains(otherIdx) then return;
     for i in ranges(onlyDim).these(tag) do yield i;
   }
 
@@ -574,7 +574,7 @@ iter LocCyclicDom.dsiPartialThese(param onlyDim, otherIdx, param tag)
 proc LocCyclicArr.dsiGetBaseDom() { return locDom; }
 
 proc LocCyclicArr.clone() {
-  return new unmanaged LocCyclicArr(eltType,rank,idxType,stridable,
+  return new unmanaged LocCyclicArr(eltType,rank,idxType,
       locDom,locRAD,locCyclicRAD,myElems,locRADLock);
 }
 
@@ -669,7 +669,7 @@ iter LocBlockCyclicDom.dsiPartialThese(param onlyDim, otherIdx,
 }
 
 proc LocBlockCyclicArr.clone() {
-  return new LocBlockCyclicArr(eltType,rank,idxType,stridable,
+  return new unmanaged LocBlockCyclicArr(eltType,rank,idxType,stridable,
       allocDom,indexDom);
 }
 

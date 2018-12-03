@@ -29,7 +29,6 @@
 #include "expr.h"
 #include "files.h"
 #include "intlimits.h"
-#include "ipe.h"
 #include "iterator.h"
 #include "LayeredValueTable.h"
 #include "llvmVer.h"
@@ -110,12 +109,22 @@ void EnumType::codegenDef() {
       type = ty->codegen().type;
       info->lvt->addGlobalType(symbol->cname, type);
 
+      // Convert enums to constants with the user-specified immediate,
+      // sized appropriately, when it exists.  When it doesn't, give
+      // it the semi-arbitrary 0-based ordinal value (similar to what
+      // the C back-end would do itself).  Note that once some enum
+      // has a non-NULL constant->init, all subsequent ones should as
+      // well.
+      int order = 0;
       for_enums(constant, this) {
         //llvm::Constant *initConstant;
 
-        if(constant->init == NULL) INT_FATAL(this, "no constant->init");
-
-        VarSymbol* s = toVarSymbol(toSymExpr(constant->init)->symbol());
+        VarSymbol* s;
+        if (constant->init) {
+          s = toVarSymbol(toSymExpr(constant->init)->symbol());
+        } else {
+          s = new_IntSymbol(order, INT_SIZE_64);
+        }
         INT_ASSERT(s);
         INT_ASSERT(s->immediate);
 
@@ -123,6 +132,7 @@ void EnumType::codegenDef() {
 
         info->lvt->addGlobalValue(constant->sym->cname,
                                   sizedImmediate->codegen());
+        order++;
       }
     }
 #endif

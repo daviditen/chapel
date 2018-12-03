@@ -36,39 +36,98 @@
 // It might be worth moving them here for documentation - KB Feb 2016
 
 /*
-  The following documentation shows functions and methods used to
-  manipulate and process Chapel strings.
+The following documentation shows functions and methods used to
+manipulate and process Chapel strings.
 
-  Besides the functions below, some other modules proved routines that are
-  useful for working with strings. The :mod:`IO` module provides
-  :proc:`IO.string.format` which creates a string that is the result of
-  formatting. It also includes functions for reading and writing strings.
-  The :mod:`Regexp` module also provides some routines for searching
-  within strings.
+Methods Available in Other Modules
+----------------------------------
 
-  .. warning::
+Besides the functions below, some other modules provide routines that are
+useful for working with strings. The :mod:`IO` module provides
+:proc:`IO.string.format` which creates a string that is the result of
+formatting. It also includes functions for reading and writing strings.
+The :mod:`Regexp` module also provides some routines for searching
+within strings.
 
-    Casts from :record:`string` to the following types will throw an error
-    if they are invalid:
+Casts from String to a Numeric Type
+-----------------------------------
 
-      - ``int``
-      - ``uint``
-      - ``real``
-      - ``imag``
-      - ``complex``
-      - ``enum``
+This module supports casts from :record:`string` to numeric types. Such casts
+will convert the string to the numeric type and throw an error if the string
+is invalid. For example:
 
-    To learn more about handling these errors, see the
-    :ref:`Error Handling technical note <readme-errorHandling>`.
+.. code-block:: chapel
 
-  .. note::
+  var number = "a":int;
 
-    While :record:`string` is intended to be a Unicode string, there is much
-    left to do. As of Chapel 1.17, only ASCII strings can be expected to work
-    correctly with all functions.
+throws an error when it is executed, but
 
-    Future work involves support for both ASCII and unicode strings, and
-    allowing users to specify the encoding for individual strings.
+.. code-block:: chapel
+
+  var number = "1":int;
+
+stores the value ``1`` in ``number``.
+
+To learn more about handling these errors, see the
+:ref:`Error Handling technical note <readme-errorHandling>`.
+
+
+Activating Unicode Support
+--------------------------
+
+Chapel strings normally use the UTF-8 encoding. Note that ASCII strings are a
+simple subset of UTF-8 strings, because every ASCII character is a UTF-8
+character with the same meaning.
+
+Certain environment variables may need to be set in order to enable UTF-8
+support. Setting these environment variables may not be necessary at all on
+some systems.
+
+.. note::
+
+  For example, Chapel is currently tested with the following settings:
+
+  ``export LANG=en_US.UTF-8``
+
+  ``export LC_COLLATE=C``
+
+  ``unset LC_ALL``
+
+  LANG sets the default character set.  LC_COLLATE overrides it for
+  sorting, so that we get consistent results.  Anything in LC_ALL
+  would override everything, so we unset it.
+
+.. note::
+
+  Chapel currently relies upon C multibyte character support and may work
+  with other settings of these variables that request non-Unicode multibyte
+  character sets. However such a configuration is not regularly tested and
+  may not work in the future.
+
+Lengths and Offsets in Unicode Strings
+--------------------------------------
+
+For Unicode strings, and in particular UTF-8 strings, there are several possible
+units for offsets or lengths:
+
+ * bytes
+ * code points
+ * graphemes
+
+Most methods on the Chapel string type currently work with byte units by
+default. For example, :proc:`~string.length` returns the length in bytes and
+`int` values passed into :proc:`~string.this` are offsets in byte units.
+
+The string type currently supports code point units as well. In some cases these
+units are indicated by the method name, for example with
+:proc:`~string.ulength`. Other methods, including :proc:`~string.this`, support
+arguments of type :record:`codePointIndex` (instead of `int`) in order to
+request code point units.
+
+.. note::
+
+  Support for graphemes units is not implemented at this time.
+
  */
 module String {
   use ChapelStandard;
@@ -112,6 +171,10 @@ module String {
   pragma "no doc"
   type bufferType = c_ptr(uint(8));
 
+  private extern proc qio_decode_char_buf(ref chr:int(32), ref nbytes:c_int, buf:c_string, buflen:ssize_t):syserr;
+  private extern proc qio_encode_char_buf(dst:c_void_ptr, chr:int(32)):syserr;
+  private extern proc qio_nbytes_char(chr:int(32)):c_int;
+
   pragma "no doc"
   extern const CHPL_SHORT_STRING_SIZE : c_int;
 
@@ -148,6 +211,66 @@ module String {
     var shortData : chpl__inPlaceBuffer;
   }
 
+  /*
+     A value of type :record:`codePointIndex` can be passed to certain
+     `string` functions to indicate that the function should operate
+     with units of code points. See :proc:`~string.this`.
+
+     To create or modify a :record:`codePointIndex`, cast it to or from an
+     `int`. For example, For example, the following function returns a string
+     containing only the second codepoint of the argument:
+
+     .. code-block:: chapel
+
+       proc getSecondCodepoint(arg:string) : int {
+         var offsetInCodepoints = 1:codePointIndex;
+         return arg[offsetInCodepoints];
+       }
+
+   */
+  record codePointIndex {
+    pragma "no doc"
+    var _cpindex  : int;
+  }
+
+  // Helper routines in support of being able to use ranges of codePointIndex
+  pragma "no doc"
+  proc chpl_build_bounded_range(low: codePointIndex, high: codePointIndex)
+    return new range(codePointIndex, _low=low, _high=high);
+
+  pragma "no doc"
+  proc chpl_build_low_bounded_range(low: codePointIndex)
+    return new range(codePointIndex, BoundedRangeType.boundedLow, _low=low);
+
+  pragma "no doc"
+  proc chpl_build_high_bounded_range(high: codePointIndex)
+    return new range(codePointIndex, BoundedRangeType.boundedHigh, _high=high);
+
+  pragma "no doc"
+  proc chpl__rangeStrideType(type idxType: codePointIndex) type
+    return int;
+
+  pragma "no doc"
+  proc chpl__rangeUnsignedType(type idxType: codePointIndex) type
+    return uint;
+
+  pragma "no doc"
+  inline proc chpl__idxToInt(i: codePointIndex)
+    return i:int;
+
+  pragma "no doc"
+  inline proc chpl__intToIdx(type idxType: codePointIndex, i: int)
+    return i: codePointIndex;
+
+  pragma "no doc"
+  proc chpl__idxTypeToIntIdxType(type idxType: codePointIndex) type
+    return int;
+
+  pragma "no doc"
+  proc >(x: codePointIndex, y: codePointIndex)
+    return x: int > y: int;
+  // End range helper support
+
   //
   // String Implementation
   //
@@ -156,7 +279,7 @@ module String {
   // in when possible.
   pragma "ignore noinit"
   pragma "no default functions" // avoid the default (read|write)This routines
-  record string {
+  record _string {
     pragma "no doc"
     var len: int = 0; // length of string in bytes
     pragma "no doc"
@@ -184,7 +307,7 @@ module String {
       of a shallow copy.
      */
     proc init(s: string, isowned: bool = true) {
-      const sRemote = s.locale_id != chpl_nodeID;
+      const sRemote = _local == false && s.locale_id != chpl_nodeID;
       const sLen = s.len;
       this.isowned = isowned;
       this.complete();
@@ -335,14 +458,24 @@ module String {
     }
 
     /*
-      :returns: The number of characters in the string.
+      :returns: The number of bytes in the string.
       */
     inline proc length return len;
 
     /*
-      :returns: The number of characters in the string.
+      :returns: The number of bytes in the string.
       */
     inline proc size return len;
+
+    /*
+      :returns: The number of Unicode codepoints in the string.
+      */
+    proc ulength {
+      var n = 0;
+      for codepoint in this.uchars() do
+        n += 1;
+      return n;
+    }
 
     /*
        Gets a version of the :record:`string` that is on the currently
@@ -385,11 +518,11 @@ module String {
           on the same locale as the string.
      */
     inline proc c_str(): c_string {
-      inline proc _cast(type t, x) where t:c_string && x.type:bufferType {
+      inline proc _cast(type t:c_string, x:bufferType) {
         return __primitive("cast", t, x);
       }
 
-      if this.locale_id != chpl_nodeID then
+      if _local == false && this.locale_id != chpl_nodeID then
         halt("Cannot call .c_str() on a remote string");
 
       return this.buff:c_string;
@@ -397,7 +530,7 @@ module String {
 
     pragma "no doc"
     inline proc param c_str() param : c_string {
-      inline proc _cast(type t, x) where t:c_string && x.type:string {
+      inline proc _cast(type t:c_string, x:string) {
         return __primitive("cast", t, x);
       }
       return this:c_string; // folded out in resolution
@@ -431,32 +564,106 @@ module String {
     }
 
     /*
+      Iterates over the string Unicode character by Unicode character.
+    */
+    iter uchars(): int(32) {
+      var localThis: string = this.localize();
+
+      var i = 0;
+      while i < localThis.len {
+        var codepoint: int(32);
+        var nbytes: c_int;
+        var multibytes = (localThis.buff + i): c_string;
+        var maxbytes = (localThis.len - i): ssize_t;
+        qio_decode_char_buf(codepoint, nbytes, multibytes, maxbytes);
+        yield codepoint;
+        i += nbytes;
+      }
+    }
+
+    /*
+      Iterates over the string Unicode character by Unicode character,
+      and includes the byte index and byte length of each character.
+      Skip characters that begin prior to the specified starting byte index.
+    */
+    pragma "no doc"
+    iter _ucharsIndexLen(start: int = 1) {
+      var localThis: string = this.localize();
+
+      var i = 0;
+      while i < localThis.len {
+        var codepoint: int(32);
+        var nbytes: c_int;
+        var multibytes = (localThis.buff + i): c_string;
+        var maxbytes = (localThis.len - i): ssize_t;
+        qio_decode_char_buf(codepoint, nbytes, multibytes, maxbytes);
+        if i + 1 >= start then
+          yield (codepoint:int(32), i + 1, nbytes:int);
+        i += nbytes;
+      }
+    }
+
+    /*
       Index into a string
 
-      :returns: A string with the character at the specified index from
-                `1..string.length`
+      :returns: A string with the complete multibyte character starting at the
+                specified byte index from `1..string.length`
      */
     proc this(i: int) : string {
       if boundsChecking && (i <= 0 || i > this.len)
         then halt("index out of bounds of string: ", i);
 
       var ret: string;
-      const newSize = chpl_here_good_alloc_size(2);
+      var maxbytes = (this.len - (i - 1)): ssize_t;
+      if maxbytes < 0 || maxbytes > 4 then
+        maxbytes = 4;
+      const newSize = chpl_here_good_alloc_size(maxbytes + 1);
       ret._size = max(chpl_string_min_alloc_size, newSize);
-      ret.len = 1;
       ret.buff = chpl_here_alloc(ret._size,
                                 offset_STR_COPY_DATA): bufferType;
       ret.isowned = true;
 
-      const remoteThis = this.locale_id != chpl_nodeID;
+      const remoteThis = _local == false && this.locale_id != chpl_nodeID;
+      var multibytes: bufferType;
       if remoteThis {
-        chpl_string_comm_get(ret.buff, this.locale_id, this.buff + i - 1, 1);
+        chpl_string_comm_get(ret.buff, this.locale_id, this.buff + i - 1, maxbytes);
+        multibytes = ret.buff;
       } else {
-        ret.buff[0] = this.buff[i-1];
+        multibytes = this.buff + i - 1;
       }
-      ret.buff[1] = 0;
+      var codepoint: int(32);
+      var nbytes: c_int;
+      qio_decode_char_buf(codepoint, nbytes, multibytes:c_string, maxbytes);
+      if !remoteThis {
+        c_memcpy(ret.buff, multibytes, nbytes);
+      }
+      ret.buff[nbytes] = 0;
+      ret.len = nbytes;
 
       return ret;
+    }
+
+    /*
+      Index into a string
+
+      :returns: A Unicode codepoint starting at the
+                specified codepoint index from `1..string.ulength`
+     */
+    proc this(cpi: codePointIndex) : int(32) {
+      const idx = cpi: int;
+      if boundsChecking && idx <= 0 then
+        halt("index out of bounds of string: ", idx);
+
+      var i = 1;
+      for codepoint in this.uchars() {
+        if i == idx then
+          return codepoint;
+        i += 1;
+      }
+      // We have reached the end of the string without finding our index.
+      if boundsChecking then
+        halt("index out of bounds of string: ", idx);
+      return 0: int(32);
     }
 
     // Checks to see if r is inside the bounds of this and returns a finite
@@ -510,7 +717,7 @@ module String {
                                   offset_STR_COPY_DATA): bufferType;
 
         var thisBuff: bufferType;
-        const remoteThis = this.locale_id != chpl_nodeID;
+        const remoteThis = _local == false && this.locale_id != chpl_nodeID;
         if remoteThis {
           // TODO: Could do an optimization here and only pull down the data
           // between r2.low and r2.high. Indexing for the copy below gets a bit
@@ -834,7 +1041,7 @@ module String {
         var inChunk : bool = false;
         var chunkStart : int;
 
-        for i in 0..iEnd {
+        for (c, i, nbytes) in localThis._ucharsIndexLen() {
           // emit whole string, unless all whitespace
           if noSplits {
             done = true;
@@ -843,20 +1050,19 @@ module String {
               yieldChunk = true;
             }
           } else {
-            var b = localThis.buff[i];
-            var bSpace = byte_isWhitespace(b);
+            var cSpace = codepoint_isWhitespace(c);
             // first char of a chunk
-            if !(inChunk || bSpace) {
-              chunkStart = i + 1; // 0-based buff -> 1-based range
+            if !(inChunk || cSpace) {
+              chunkStart = i;
               inChunk = true;
-              if i == iEnd {
+              if i - 1 + nbytes > iEnd {
                 chunk = localThis[chunkStart..];
                 yieldChunk = true;
                 done = true;
               }
             } else if inChunk {
               // first char out of a chunk
-              if bSpace {
+              if cSpace {
                 splitCount += 1;
                 // last split under limit
                 if limitSplits && splitCount > maxsplit {
@@ -865,12 +1071,12 @@ module String {
                   done = true;
                 // no limit
                 } else {
-                  chunk = localThis[chunkStart..i];
+                  chunk = localThis[chunkStart..i-1];
                   yieldChunk = true;
                   inChunk = false;
                 }
               // out of chars
-              } else if i == iEnd {
+              } else if i - 1 + nbytes > iEnd {
                 chunk = localThis[chunkStart..];
                 yieldChunk = true;
                 done = true;
@@ -928,6 +1134,21 @@ module String {
       return _join(S);
     }
 
+    pragma "no doc"
+    proc join(ir: _iteratorRecord) {
+      var s: string;
+      var first: bool = true;
+      for i in ir {
+        if first then
+          first = false;
+        else
+          s += this;
+        s += i;
+      }
+      return s;
+    }
+
+    pragma "no doc"
     proc _join(const ref S) : string where isTuple(S) || isArray(S) {
       if S.size == 0 {
         return '';
@@ -1002,10 +1223,10 @@ module String {
       var end = localThis.len;
 
       if leading {
-        label outer for i in 0..#localThis.len {
-          for j in 0..#localChars.len {
-            if localThis.buff[i] == localChars.buff[j] {
-              start += 1;
+        label outer for (thisChar, i, nbytes) in localThis._ucharsIndexLen() {
+          for removeChar in localChars.uchars() {
+            if thisChar == removeChar {
+              start = i + nbytes;
               continue outer;
             }
           }
@@ -1014,14 +1235,19 @@ module String {
       }
 
       if trailing {
-        label outer for i in 0..#localThis.len by -1 {
-          for j in 0..#localChars.len {
-            if localThis.buff[i] == localChars.buff[j] {
-              end -= 1;
+        // Because we are working with codepoints whose starting byte index
+        // is not initially known, it is faster to work forward, assuming we
+        // are already past the end of the string, and then update the end
+        // point as we are proven wrong.
+        end = 0;
+        label outer for (thisChar, i, nbytes) in localThis._ucharsIndexLen(start) {
+          for removeChar in localChars.uchars() {
+            if thisChar == removeChar {
               continue outer;
             }
           }
-          break;
+          // This was not a character to be removed, so update tentative end.
+          end = i + nbytes-1;
         }
       }
 
@@ -1061,16 +1287,15 @@ module String {
       on __primitive("chpl_on_locale_num",
                      chpl_buildLocaleID(this.locale_id, c_sublocid_any)) {
         var locale_result = false;
-        for i in 0..#this.len {
-          const b = buff[i];
-          if byte_isLower(b) {
+        for codepoint in this.uchars() {
+          if codepoint_isLower(codepoint) {
             locale_result = false;
             break;
-          } else if !locale_result && byte_isUpper(b) {
+          } else if !locale_result && codepoint_isUpper(codepoint) {
             locale_result = true;
           }
-          result = locale_result;
         }
+        result = locale_result;
       }
       return result;
     }
@@ -1084,19 +1309,20 @@ module String {
      */
     proc isLower() : bool {
       if this.isEmptyString() then return false;
-      var result: bool = false;
 
+      var result: bool;
       on __primitive("chpl_on_locale_num",
                      chpl_buildLocaleID(this.locale_id, c_sublocid_any)) {
-        for i in 0..#this.len {
-          const b = buff[i];
-          if byte_isUpper(b) {
-            result = false;
+        var locale_result = false;
+        for codepoint in this.uchars() {
+          if codepoint_isUpper(codepoint) {
+            locale_result = false;
             break;
-          } else if !result && byte_isLower(b) {
-            result = true;
+          } else if !locale_result && codepoint_isLower(codepoint) {
+            locale_result = true;
           }
         }
+        result = locale_result;
       }
       return result;
     }
@@ -1114,9 +1340,8 @@ module String {
 
       on __primitive("chpl_on_locale_num",
                      chpl_buildLocaleID(this.locale_id, c_sublocid_any)) {
-        for i in 0..#this.len {
-          const b = buff[i];
-          if !(byte_isWhitespace(b)) {
+        for codepoint in this.uchars() {
+          if !(codepoint_isWhitespace(codepoint)) {
             result = false;
             break;
           }
@@ -1137,9 +1362,8 @@ module String {
 
       on __primitive("chpl_on_locale_num",
                      chpl_buildLocaleID(this.locale_id, c_sublocid_any)) {
-        for i in 0..#this.len {
-          const b = buff[i];
-          if !byte_isAlpha(b) {
+        for codepoint in this.uchars() {
+          if !codepoint_isAlpha(codepoint) {
             result = false;
             break;
           }
@@ -1160,9 +1384,8 @@ module String {
 
       on __primitive("chpl_on_locale_num",
                      chpl_buildLocaleID(this.locale_id, c_sublocid_any)) {
-        for i in 0..#this.len {
-          const b = buff[i];
-          if !byte_isDigit(b) {
+        for codepoint in this.uchars() {
+          if !codepoint_isDigit(codepoint) {
             result = false;
             break;
           }
@@ -1183,9 +1406,8 @@ module String {
 
       on __primitive("chpl_on_locale_num",
                      chpl_buildLocaleID(this.locale_id, c_sublocid_any)) {
-        for i in 0..#this.len {
-          const b = buff[i];
-          if !(byte_isAlpha(b) || byte_isDigit(b)) {
+        for codepoint in this.uchars() {
+          if !(codepoint_isAlpha(codepoint) || codepoint_isDigit(codepoint)) {
             result = false;
             break;
           }
@@ -1195,9 +1417,7 @@ module String {
     }
 
     /*
-     Checks if all the characters in the string are printable. Characters are
-     defined as being printable if they are within the range of `0x20 - 0x7e`
-     including the bounds.
+     Checks if all the characters in the string are printable.
 
       :returns: * `true`  -- when the characters are printable.
                 * `false` -- otherwise
@@ -1208,9 +1428,8 @@ module String {
 
       on __primitive("chpl_on_locale_num",
                      chpl_buildLocaleID(this.locale_id, c_sublocid_any)) {
-        for i in 0..#this.len {
-          const char = buff[i];
-          if char <= 0x1f  || char == 0x7f {
+        for codepoint in this.uchars() {
+          if !codepoint_isPrintable(codepoint) {
             result = false;
             break;
           }
@@ -1234,9 +1453,8 @@ module String {
                      chpl_buildLocaleID(this.locale_id, c_sublocid_any)) {
         param UN = 0, UPPER = 1, LOWER = 2;
         var last = UN;
-        for i in 0..#this.len {
-          const b = buff[i];
-          if byte_isLower(b) {
+        for codepoint in this.uchars() {
+          if codepoint_isLower(codepoint) {
             if last == UPPER || last == LOWER {
               last = LOWER;
             } else { // last == UN
@@ -1244,7 +1462,7 @@ module String {
               break;
             }
           }
-          else if byte_isUpper(b) {
+          else if codepoint_isUpper(codepoint) {
             if last == UN {
               last = UPPER;
             } else { // last == UPPER || last == LOWER
@@ -1263,17 +1481,32 @@ module String {
     /*
       :returns: A new string with all uppercase characters replaced with their
                 lowercase counterpart.
+
+      Note: At present, this performs a one-to-one character mapping,
+      which is all that the underlying C library supports.  In the future,
+      it may be desirable to explore supporting special-case one-to-many
+      Unicode mappings that may change the length of the string.
+      Since Unicode changes and we would rather not track all the changes
+      ourselves, this would involve adopting an external library.
     */
     proc toLower() : string {
       var result: string = this;
       if result.isEmptyString() then return result;
 
-      for i in 0..#result.len {
-        const b = result.buff[i];
-        if byte_isUpper(b) {
-          // We can just add or subtract 0x20 to change between upper and lower
-          result.buff[i] = b + 0x20;
+      var i = 0;
+      while i < result.len {
+        var codepoint: int(32);
+        var nbytes: c_int;
+        var multibytes = (result.buff + i): c_string;
+        var maxbytes = (result.len - i): ssize_t;
+        qio_decode_char_buf(codepoint, nbytes, multibytes, maxbytes);
+        var lowCodepoint = codepoint_toLower(codepoint);
+        if lowCodepoint != codepoint {
+          // This assumes that the upper and lower case version of a
+          // character take the same number of bytes.
+          qio_encode_char_buf(result.buff + i, lowCodepoint);
         }
+        i += nbytes;
       }
       return result;
     }
@@ -1281,16 +1514,32 @@ module String {
     /*
       :returns: A new string with all lowercase characters replaced with their
                 uppercase counterpart.
+
+      Note: At present, this performs a one-to-one character mapping,
+      which is all that the underlying C library supports.  In the future,
+      it may be desirable to explore supporting special-case one-to-many
+      Unicode mappings that may change the length of the string.
+      Since Unicode changes and we would rather not track all the changes
+      ourselves, this would involve adopting an external library.
     */
     proc toUpper() : string {
       var result: string = this;
       if result.isEmptyString() then return result;
 
-      for i in 0..#result.len {
-        const b = result.buff[i];
-        if byte_isLower(b) {
-          result.buff[i] = b - 0x20;
+      var i = 0;
+      while i < result.len {
+        var codepoint: int(32);
+        var nbytes: c_int;
+        var multibytes = (result.buff + i): c_string;
+        var maxbytes = (result.len - i): ssize_t;
+        qio_decode_char_buf(codepoint, nbytes, multibytes, maxbytes);
+        var upCodepoint = codepoint_toUpper(codepoint);
+        if upCodepoint != codepoint {
+          // This assumes that the upper and lower case version of a
+          // character take the same number of bytes.
+          qio_encode_char_buf(result.buff + i, upCodepoint);
         }
+        i += nbytes;
       }
       return result;
     }
@@ -1299,6 +1548,13 @@ module String {
       :returns: A new string with all cased characters following an uncased
                 character converted to uppercase, and all cased characters
                 following another cased character converted to lowercase.
+
+      Note: At present, this performs a one-to-one character mapping,
+      which is all that the underlying C library supports.  In the future,
+      it may be desirable to explore supporting special-case one-to-many
+      Unicode mappings that may change the length of the string.
+      Since Unicode changes and we would rather not track all the changes
+      ourselves, this would involve adopting an external library.
      */
     proc toTitle() : string {
       var result: string = this;
@@ -1306,23 +1562,35 @@ module String {
 
       param UN = 0, LETTER = 1;
       var last = UN;
-      for i in 0..#result.len {
-        const b = result.buff[i];
-        if byte_isAlpha(b) {
+      var i = 0;
+      while i < result.len {
+        var codepoint: int(32);
+        var nbytes: c_int;
+        var multibytes = (result.buff + i): c_string;
+        var maxbytes = (result.len - i): ssize_t;
+        qio_decode_char_buf(codepoint, nbytes, multibytes, maxbytes);
+        if codepoint_isAlpha(codepoint) {
           if last == UN {
             last = LETTER;
-            if byte_isLower(b) {
-              result.buff[i] = b - 0x20;
+            var upCodepoint = codepoint_toUpper(codepoint);
+            if upCodepoint != codepoint {
+              // This assumes that the upper and lower case version of a
+              // character take the same number of bytes.
+              qio_encode_char_buf(result.buff + i, upCodepoint);
             }
           } else { // last == LETTER
-            if byte_isUpper(b) {
-              result.buff[i] = b + 0x20;
+            var lowCodepoint = codepoint_toLower(codepoint);
+            if lowCodepoint != codepoint {
+              // This assumes that the upper and lower case version of a
+              // character take the same number of bytes.
+              qio_encode_char_buf(result.buff + i, lowCodepoint);
             }
           }
         } else {
           // Uncased elements
           last = UN;
         }
+        i += nbytes;
       }
       return result;
     }
@@ -1337,9 +1605,16 @@ module String {
       var result: string = this.toLower();
       if result.isEmptyString() then return result;
 
-      var b = result.buff[0];
-      if byte_isLower(b) {
-        result.buff[0] = b - 0x20;
+      var codepoint: int(32);
+      var nbytes: c_int;
+      var multibytes = result.buff: c_string;
+      var maxbytes = result.len: ssize_t;
+      qio_decode_char_buf(codepoint, nbytes, multibytes, maxbytes);
+      var upCodepoint = codepoint_toUpper(codepoint);
+      if upCodepoint != codepoint {
+        // This assumes that the upper and lower case version of a
+        // character take the same number of bytes.
+        qio_encode_char_buf(result.buff, upCodepoint);
       }
       return result;
     }
@@ -1634,7 +1909,7 @@ module String {
   //  "1000" < "101" < "1010".
   //
 
-  private inline proc _strcmp(a: string, b:string) : int {
+  private inline proc _strcmp_local(a: string, b:string) : int {
     // Assumes a and b are on same locale and not empty.
     const size = min(a.len, b.len);
     const result =  c_memcmp(a.buff, b.buff, size);
@@ -1647,16 +1922,19 @@ module String {
     return result;
   }
 
+  private inline proc _strcmp(a: string, b:string) : int {
+    if a.locale_id == chpl_nodeID && b.locale_id == chpl_nodeID {
+      // it's local
+      return _strcmp_local(a, b);
+    } else {
+      var localA: string = a.localize();
+      var localB: string = b.localize();
+      return _strcmp_local(localA, localB);
+    }
+  }
+
   pragma "no doc"
   proc ==(a: string, b: string) : bool {
-    inline proc doEq(a: string, b:string) {
-      // TODO: is it better to have these outside of the do* fns?
-      //       probably would be 2 extra gets worst case, but avoids doing a
-      //       local copy if b is remote
-      if a.len != b.len then return false;
-      return _strcmp(a, b) == 0;
-    }
-
     // At the moment, this commented out section will not work correctly. If a
     // and b are on the same locale, we will go to that locale, but an autoCopy
     // will localize a and b, before they are placed into the on bundle,
@@ -1672,85 +1950,84 @@ module String {
       return ret;
     } else { */
 
-    var localA: string = a.localize();
-    var localB: string = b.localize();
-
-    return doEq(localA, localB);
+    return _strcmp(a, b) == 0;
   }
 
   pragma "no doc"
   inline proc !=(a: string, b: string) : bool {
-    return !(a == b);
+    return _strcmp(a, b) != 0;
   }
 
   pragma "no doc"
   inline proc <(a: string, b: string) : bool {
-    inline proc doLt(a: string, b:string) {
-      return _strcmp(a, b) < 0;
-    }
-
-    var localA: string = a.localize();
-    var localB: string = b.localize();
-
-    return doLt(localA, localB);
+    return _strcmp(a, b) < 0;
   }
 
   pragma "no doc"
   inline proc >(a: string, b: string) : bool {
-    inline proc doGt(a: string, b:string) {
-      return _strcmp(a, b) > 0;
-    }
-
-    var localA: string = a.localize();
-    var localB: string = b.localize();
-
-    return doGt(localA, localB);
+    return _strcmp(a, b) > 0;
   }
 
   pragma "no doc"
   inline proc <=(a: string, b: string) : bool {
-    return !(a > b);
+    return _strcmp(a, b) <= 0;
   }
   pragma "no doc"
   inline proc >=(a: string, b: string) : bool {
-    return !(a < b);
+    return _strcmp(a, b) >= 0;
   }
 
 
   //
   // Helper routines
   //
-  private const uint_A = ascii('A');
-  private const uint_Z = ascii('Z');
-  private const uint_a = ascii('a');
-  private const uint_z = ascii('z');
-  private const uint_0 = ascii('0');
-  private const uint_9 = ascii('9');
-  private const uint_space    = ascii(' ');
-  private const uint_tab      = ascii('\t');
-  private const uint_newline  = ascii('\n');
-  private const uint_return   = ascii('\r');
 
-  private inline proc byte_isUpper(b: uint(8)) : bool {
-    return b >= uint_A && b <= uint_Z;
+  require "wctype.h";
+
+  // Portability Note:
+  // wint_t will normally be a 32-bit int.
+  // There may be systems where it is not.
+  pragma "no doc"
+  extern type wint_t = int(32);
+
+  private inline proc codepoint_isUpper(c: int(32)) : bool {
+    extern proc iswupper(wc: wint_t): c_int;
+    return iswupper(c: wint_t) != 0;
   }
 
-  private inline proc byte_isLower(b: uint(8)) : bool {
-    return b >= uint_a && b <= uint_z;
+  private inline proc codepoint_isLower(c: int(32)) : bool {
+    extern proc iswlower(wc: wint_t): c_int;
+    return iswlower(c: wint_t) != 0;
   }
 
-  private inline proc byte_isAlpha(b: uint(8)) : bool {
-    return byte_isLower(b) || byte_isUpper(b);
+  private inline proc codepoint_isAlpha(c: int(32)) : bool {
+    extern proc iswalpha(wc: wint_t): c_int;
+    return iswalpha(c: wint_t) != 0;
   }
 
-  private inline proc byte_isDigit(b: uint(8)) : bool {
-    return b >= uint_0  && b <= uint_9;
+  private inline proc codepoint_isDigit(c: int(32)) : bool {
+    extern proc iswdigit(wc: wint_t): c_int;
+    return iswdigit(c) != 0;
   }
 
-  private inline proc byte_isWhitespace(b: uint(8)) : bool {
-    return b == uint_space
-        || b == uint_tab
-        || (b >= uint_newline && b <= uint_return);
+  private inline proc codepoint_isWhitespace(c: int(32)) : bool {
+    extern proc iswspace(wc: wint_t): c_int;
+    return iswspace(c) != 0;
+  }
+
+  private inline proc codepoint_isPrintable(c: int(32)) : bool {
+    extern proc iswprint(wc: wint_t): c_int;
+    return iswprint(c) != 0;
+  }
+
+  private inline proc codepoint_toLower(c: int(32)) : int(32) {
+    extern proc towlower(wc: wint_t): wint_t;
+    return towlower(c: wint_t): int(32);
+  }
+
+  private inline proc codepoint_toUpper(c: int(32)) : int(32) {
+    extern proc towupper(wc: wint_t): wint_t;
+    return towupper(c: wint_t): int(32);
   }
 
   //
@@ -1783,6 +2060,21 @@ module String {
     return s;
   }
 
+  /*
+     :returns: A string storing the complete multibyte character sequence
+               that corresponds to the codepoint value `i`.
+  */
+  inline proc codePointToString(i: int(32)) {
+    const mblength = qio_nbytes_char(i): int;
+    const mbsize = max(chpl_string_min_alloc_size,
+                       chpl_here_good_alloc_size(mblength + 1));
+    var buffer = chpl_here_alloc(mbsize, offset_STR_COPY_DATA): bufferType;
+    qio_encode_char_buf(buffer, i);
+    buffer[mblength] = 0;
+    var s = new string(buffer, mblength, mbsize, isowned=true, needToCopy=false);
+    return s;
+  }
+
 
   //
   // Casts (casts to & from other primitive types are in StringCasts)
@@ -1805,6 +2097,20 @@ module String {
     ret.isowned = true;
 
     return ret;
+  }
+
+  // Cast from codePointIndex to int
+  pragma "no doc"
+  inline proc _cast(type t: int, cpi: codePointIndex) {
+    return cpi._cpindex;
+  }
+
+  // Cast from int to codePointIndex
+  pragma "no doc"
+  inline proc _cast(type t: codePointIndex, i: int) {
+    var cpi: codePointIndex;
+    cpi._cpindex = i;
+    return cpi;
   }
 
   //

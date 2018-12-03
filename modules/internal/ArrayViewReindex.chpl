@@ -32,7 +32,6 @@ module ArrayViewReindex {
   // that it creates reindexed views of, and a down-facing and up-facing
   // domain indicating the old and new index sets, respectively.
   //
-  pragma "use default init"
   class ArrayViewReindexDist: BaseDist {
     // a pointer down to the distribution that this class is creating
     // reindexed views of
@@ -91,6 +90,10 @@ module ArrayViewReindex {
       _delete_dom(updom, false);
       //      _delete_dom(downdomInst, _isPrivatized(downdomInst));
     }
+
+    proc dsiIsLayout() param {
+      return downDistInst.dsiIsLayout();
+    }
   }
 
   //
@@ -100,7 +103,6 @@ module ArrayViewReindex {
   // for rectangular domains so this is a subclass of
   // BaseRectangularDom.
   //
- pragma "use default init"
  class ArrayViewReindexDom: BaseRectangularDom {
     // the new reindexed index set that we represent upwards
     var updom: unmanaged DefaultRectangularDom(rank, idxType, stridable);
@@ -275,7 +277,7 @@ module ArrayViewReindex {
       }
     }
 
-    proc dsiDestroyDom() {
+    override proc dsiDestroyDom() {
       _delete_dom(updom, false);
       _delete_dom(downdomInst, _isPrivatized(downdomInst));
     }
@@ -339,6 +341,7 @@ module ArrayViewReindex {
   // The class representing a slice of an array.  Like other array
   // class implementations, it supports the standard dsi interface.
   //
+  pragma "aliasing array"
   class ArrayViewReindexArr: BaseArr {
     type eltType;  // see note on commented-out proc eltType below...
 

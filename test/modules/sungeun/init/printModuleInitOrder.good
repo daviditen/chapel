@@ -12,6 +12,7 @@ Initializing Modules:
     ChapelThreads
     ChapelTuple
     ChapelRange
+     HaltWrappers
     ChapelTaskDataHelp
     LocaleModel
      LocaleModelHelpFlat

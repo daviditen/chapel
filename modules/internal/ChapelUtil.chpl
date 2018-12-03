@@ -100,13 +100,15 @@ module ChapelUtil {
   pragma "no default functions"
   extern record chpl_main_argument {
     var argc: int(64);
-    var argv: _ddata(string);
+    // var argv: c_ptr(c_string);
     var return_value: int(32);
   }
 
   proc =(ref lhs:chpl_main_argument, rhs:chpl_main_argument) {
     __primitive("=", lhs, rhs);
   }
+
+  proc chpl__initCopy(x:chpl_main_argument) return x;
 
   proc chpl_convert_args(arg: chpl_main_argument) {
     var local_arg = arg;
@@ -138,7 +140,7 @@ module ChapelUtil {
       new unmanaged chpl_ModuleDeinit(moduleName, deinitFun, chpl_moduleDeinitFuns);
   }
 
-  proc chpl_deinitModules() {
+  export proc chpl_deinitModules() {
     extern proc printf(fmt:c_string);
     extern proc printf(fmt:c_string, arg:c_string);
     extern proc chpl_execute_module_deinit(deinitFun:c_fn_ptr);

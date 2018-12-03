@@ -44,7 +44,7 @@ static IntentTag constIntentForType(Type* t) {
       t == dtCFnPtr ||
       t == dtVoid ||
       t->symbol->hasFlag(FLAG_RANGE) ||
-      t->symbol->hasFlag(FLAG_MANAGED_POINTER) ||
+      isManagedPtrType(t) ||
       // MPF: This rule seems odd to me
       (t->symbol->hasFlag(FLAG_EXTERN) && !isRecord(t))) {
     return INTENT_CONST_IN;
@@ -94,7 +94,7 @@ IntentTag blankIntentForType(Type* t) {
             || isTupleContainingRefMaybeConst(t)) {
     retval = INTENT_REF_MAYBE_CONST;
 
-  } else if (t->symbol->hasFlag(FLAG_MANAGED_POINTER)) {
+  } else if (isManagedPtrType(t)) {
     // allow blank intent owned to be transferred out of
     retval = INTENT_IN;
 
@@ -182,6 +182,7 @@ static IntentTag blankIntentForThisArg(Type* t) {
   // Range default this intent is const-in
   if (valType->symbol->hasFlag(FLAG_RANGE))
     return INTENT_CONST_IN;
+
   // For user records or types with FLAG_DEFAULT_INTENT_IS_REF_MAYBE_CONST,
   // the intent for this is INTENT_REF_MAYBE_CONST
   //
@@ -190,12 +191,11 @@ static IntentTag blankIntentForThisArg(Type* t) {
       valType->symbol->hasFlag(FLAG_DEFAULT_INTENT_IS_REF_MAYBE_CONST))
     return INTENT_REF_MAYBE_CONST;
 
-  if (isRecordWrappedType(t))  // domain / distribution
-    // array, domain, distribution wrapper records are immutable
+  if (isRecordWrappedType(t))
+    // domain / distribution
     return INTENT_CONST_REF;
-  else if (isRecord(t) || isUnion(t) || t->symbol->hasFlag(FLAG_REF))
-    // TODO - see issue #5266; also note workaround in resolveFormals
-    // makes all blank-intent _this arguments for records use INTENT_REF.
+  else if (t->symbol->hasFlag(FLAG_REF))
+    // reference
     return INTENT_REF;
   else
     return INTENT_CONST_IN;
@@ -221,7 +221,7 @@ IntentTag concreteIntentForArg(ArgSymbol* arg) {
     // to correctly mark const / not const / maybe const.
     return INTENT_REF;
 
-  else if (arg->type->symbol->hasFlag(FLAG_MANAGED_POINTER) &&
+  else if (isManagedPtrType(arg->type) &&
            (arg->intent == INTENT_BLANK || arg->intent == INTENT_CONST) &&
            arg->hasFlag(FLAG_INSTANTIATED_FROM_ANY))
 

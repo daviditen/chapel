@@ -38,11 +38,10 @@ module ExternalArray {
 
   extern proc chpl_free_external_array(x: chpl_external_array);
 
-  pragma "use default init"
   class ExternDist: BaseDist {
 
-    proc dsiNewRectangularDom(param rank: int = 1, type idxType = int,
-                              param stridable: bool = false, inds) {
+    override proc dsiNewRectangularDom(param rank: int = 1, type idxType = int,
+                                       param stridable: bool = false, inds) {
       if (rank != 1) {
         halt("external arrays are only allowed a rank of 1 right now");
       }
@@ -56,8 +55,9 @@ module ExternalArray {
         halt("there should only be one set of indices, not multiple dimensions");
       }
       var r = inds(1);
-      if (r.low != 0) {
-        halt("external arrays always have a lower bound of 0");
+      // Allow empty arrays (which have the domain 1..0)
+      if (r.low != 0 && !(r.low == 1 && r.high == 0)) {
+        halt("non-empty external arrays always have a lower bound of 0");
       }
       var newdom = new unmanaged ExternDom(idxType,
                                            r.size,
@@ -73,6 +73,8 @@ module ExternalArray {
     override proc dsiTrackDomains() return false;
 
     proc singleton() param return true;
+
+    proc dsiIsLayout() param return true;
   }
 
   var defaultExternDist = new unmanaged ExternDist();
@@ -99,6 +101,8 @@ module ExternalArray {
                                         _to_unmanaged(this),
                                         data,
                                         true);
+      // Only give the pointer initial contents if we created it ourselves.
+      init_elts(data.elts:c_ptr(eltType), this.size, eltType);
       return arr;
     }
 
@@ -331,16 +335,16 @@ module ExternalArray {
     return _newArray(arr);
   }
 
-  proc convertToExternalArray(arr: []) {
+  proc convertToExternalArray(arr: []): chpl_external_array {
+    if (!isIntegralType(arr.domain.idxType)) {
+      compilerError("cannot return an array with indices that are not " +
+                    "integrals");
+    }
     if (arr.domain.stridable) {
       compilerError("cannot return a strided array");
     }
     if (arr.domain.rank != 1) {
       compilerError("cannot return an array with rank != 1");
-    }
-    if (!isIntegralType(arr.domain.idxType)) {
-      compilerError("cannot return an array with indices that are not " +
-                    "integrals");
     }
     if (arr.domain.low != 0) {
       halt("cannot return an array when the lower bounds is not 0");

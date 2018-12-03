@@ -39,7 +39,8 @@ extern bool fNoDeadCodeElimination;
 extern bool fNoGlobalConstOpt;
 extern bool fNoFastFollowers;
 extern bool fNoInlineIterators;
-extern bool fNoloopInvariantCodeMotion;
+extern bool fNoLoopInvariantCodeMotion;
+extern bool fNoInterproceduralAliasAnalysis;
 extern bool fNoInline;
 extern bool fNoLiveAnalysis;
 extern bool fNoFormalDomainChecks;
@@ -53,6 +54,7 @@ extern bool fEnableTaskTracking;
 extern bool fLLVMWideOpt;
 
 extern bool fNoRemoteValueForwarding;
+extern bool fNoInferConstRefs;
 extern bool fNoRemoteSerialization;
 extern bool fNoRemoveCopyCalls;
 extern bool fNoScalarReplacement;
@@ -60,6 +62,7 @@ extern bool fNoTupleCopyOpt;
 extern bool fNoOptimizeRangeIteration;
 extern bool fNoOptimizeLoopIterators;
 extern bool fNoVectorize;
+extern bool fForceVectorize;
 extern bool fNoPrivatization;
 extern bool fNoOptimizeOnClauses;
 extern bool fNoRemoveEmptyRecords;
@@ -107,7 +110,6 @@ extern const char* CHPL_NETWORK_ATOMICS;
 extern const char* CHPL_GMP;
 extern const char* CHPL_HWLOC;
 extern const char* CHPL_REGEXP;
-extern const char* CHPL_WIDE_POINTERS;
 extern const char* CHPL_LLVM;
 extern const char* CHPL_AUX_FILESYS;
 extern const char* CHPL_UNWIND;
@@ -135,11 +137,12 @@ extern char fPrintStatistics[256];
 extern bool fPrintDispatch;
 extern bool fPrintUnusedFns;
 extern bool fPrintUnusedInternalFns;
+extern bool fRegionVectorizer;
 extern bool fGenIDS;
 extern bool fLocal;
 extern bool fIgnoreLocalClasses;
-extern bool fUserDefaultInitializers;
 extern bool fLifetimeChecking;
+extern bool fCompileTimeNilChecking;
 extern bool fOverrideChecking;
 extern bool fHeterogeneous;
 extern int  ffloatOpt;
@@ -163,8 +166,10 @@ extern int  fLinkStyle;
 extern int  debugParserLevel;
 extern int  debugShortLoc;
 extern bool fLibraryCompile;
+extern bool fLibraryFortran;
+extern bool fLibraryMakefile;
+extern bool fLibraryPython;
 extern bool fUseNoinit;
-extern bool fNoUserConstructors;
 extern bool no_codegen;
 extern bool developer;
 extern bool fVerify;
@@ -182,10 +187,12 @@ extern int  squelch_header_errors;
 extern bool fWarnConstLoops;
 extern bool fWarnUnstable;
 extern bool fDefaultUnmanaged;
+extern bool fLegacyNew;
 
+extern bool fReportAliases;
 extern bool fReportOptimizedLoopIterators;
 extern bool fReportInlinedIterators;
-extern bool fReportOrderIndependentLoops;
+extern bool fReportVectorizedLoops;
 extern bool fReportOptimizedOn;
 extern bool fReportPromotion;
 extern bool fReportScalarReplace;
@@ -203,7 +210,7 @@ extern int  numGlobalsOnHeap;
 extern bool preserveInlinedLineNumbers;
 
 extern int breakOnID;
-extern int breakOnDeleteID;
+extern int breakOnRemoveID;
 
 extern char stopAfterPass[128];
 
@@ -217,10 +224,6 @@ extern bool fMinimalModules;
 
 // Set to true if we want to enable incremental compilation.
 extern bool fIncrementalCompilation;
-
-// Set to true if we want to use the experimental
-// Interactive Programming Environment (IPE) mode.
-extern bool fUseIPE;
 
 // LLVM flags (-mllvm)
 extern std::string llvmFlags;

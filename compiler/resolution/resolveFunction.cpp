@@ -48,6 +48,8 @@
 
 static void resolveFormals(FnSymbol* fn);
 
+std::map<ArgSymbol*, std::string> exportedDefaultValues;
+
 static void markIterator(FnSymbol* fn);
 
 static void insertUnrefForArrayOrTupleReturn(FnSymbol* fn);
@@ -104,6 +106,10 @@ static bool shouldUpdateAtomicFormalToRef(FnSymbol* fn, ArgSymbol* formal);
 
 static bool recordContainingCopyMutatesField(Type* at);
 
+static void handleParamCNameFormal(FnSymbol* fn, ArgSymbol* formal);
+
+static void storeDefaultValuesForPython(FnSymbol* fn, ArgSymbol* formal);
+
 static void resolveFormals(FnSymbol* fn) {
   for_formals(formal, fn) {
     if (formal->type == dtUnknown) {
@@ -115,6 +121,12 @@ static void resolveFormals(FnSymbol* fn) {
 
         formal->type = formal->typeExpr->body.tail->getValType();
       }
+    }
+
+    if (formal->name == astr_chpl_cname) {
+      handleParamCNameFormal(fn, formal);
+      formal->defPoint->remove();
+      continue;
     }
 
     if (formal->type->symbol->hasFlag(FLAG_REF) == false) {
@@ -136,6 +148,67 @@ static void resolveFormals(FnSymbol* fn) {
       if ((useIntent & INTENT_FLAG_IN))
         formal->intent = useIntent;
     }
+
+    if (formal->defaultExpr != NULL && fn->hasFlag(FLAG_EXPORT)) {
+      storeDefaultValuesForPython(fn, formal);
+    }
+  }
+}
+
+// When compiling for Python interoperability, default values for arguments
+// should get propagated to the generated Python files.
+static void storeDefaultValuesForPython(FnSymbol* fn, ArgSymbol* formal) {
+  if (fLibraryPython) {
+    Expr* end = formal->defaultExpr->body.tail;
+
+    if (SymExpr* sym = toSymExpr(end)) {
+      VarSymbol* var = toVarSymbol(sym->symbol());
+
+      // Might be an ArgSymbol instead of a VarSymbol
+      if (var && var->isImmediate()) {
+        Immediate* imm = var->immediate;
+        switch (imm->const_kind) {
+        case NUM_KIND_INT:
+        case NUM_KIND_BOOL:
+        case NUM_KIND_UINT:
+        case NUM_KIND_REAL:
+          {
+          exportedDefaultValues[formal] = imm->to_string();
+          break;
+        }
+
+        case CONST_KIND_STRING: {
+          // Want to maintain the appearance of string-ness
+          exportedDefaultValues[formal] = "\"" + imm->to_string() + "\"";
+          break;
+        }
+
+        case NUM_KIND_COMPLEX: {
+          // Complex immediates only come up for the type's default value, since
+          // all other bits that could be literals also could be computations
+          // involving variables named i (so we need to resolve it).
+          INT_FATAL("Complex literals were not expected as a default value");
+        }
+
+        default: {
+          INT_FATAL("Unexpected literal type for default value");
+          break;
+        }
+        } // closes switch statement
+      } else {
+        USR_WARN(formal, "Non-literal default values are ignored in "
+                 "exported functions, argument '%s' must always be "
+                 "provided", formal->name);
+      }
+    } else {
+      USR_WARN(formal, "Non-literal default values are ignored in exported"
+               " functions, argument '%s' must always be provided",
+               formal->name);
+    }
+  } else if (fLibraryCompile) {
+      USR_WARN(formal, "Default values aren't applicable in C, argument '%s'"
+               " for exported function '%s' must always be provided",
+               formal->name, fn->name);
   }
 }
 
@@ -272,8 +345,6 @@ static bool shouldUpdateAtomicFormalToRef(FnSymbol* fn, ArgSymbol* formal) {
 
          fn->name                              != astrSequals  &&
 
-         fn->hasFlag(FLAG_DEFAULT_CONSTRUCTOR) == false        &&
-         fn->hasFlag(FLAG_CONSTRUCTOR)         == false        &&
          fn->hasFlag(FLAG_BUILD_TUPLE)         == false;
 }
 
@@ -301,6 +372,23 @@ static bool recordContainingCopyMutatesField(Type* t) {
   return ret;
 }
 
+static void handleParamCNameFormal(FnSymbol* fn, ArgSymbol* formal) {
+  // Handle param cnames for functions
+  resolveBlockStmt(formal->defaultExpr);
+  SymExpr* se = toSymExpr(formal->defaultExpr->body.last());
+  if (se == NULL) {
+    USR_FATAL(fn, "extern name expression must be param");
+  }
+  VarSymbol* var = toVarSymbol(se->symbol());
+  if (!var->isParameter()) {
+    USR_FATAL(fn, "extern name expression must be param");
+  }
+  if (var->type == dtString || var->type == dtStringC) {
+    fn->cname = var->immediate->v_string;
+  } else {
+    USR_FATAL(fn, "extern name expression must be a string");
+  }
+}
 
 /************************************* | **************************************
 *                                                                             *
@@ -370,7 +458,7 @@ void resolveSpecifiedReturnType(FnSymbol* fn) {
 *                                                                             *
 ************************************** | *************************************/
 
-void resolveFunction(FnSymbol* fn) {
+void resolveFunction(FnSymbol* fn, CallExpr* forCall) {
   if (fn->isResolved() == false) {
     if (fn->id == breakOnResolveID) {
       printf("breaking on resolve fn %s[%d] (%d args)\n",
@@ -415,13 +503,14 @@ void resolveFunction(FnSymbol* fn) {
         } else if (fn->hasFlag(FLAG_TYPE_CONSTRUCTOR) == true) {
           resolveTypeConstructor(fn);
 
-        } else if (fn->hasFlag(FLAG_PRIVATIZED_CLASS) == true &&
-                   fn->getReturnSymbol()              == gTrue) {
-          fn->getFormal(1)->type->symbol->addFlag(FLAG_PRIVATIZED_CLASS);
         }
 
         if (fn->isMethod() == true && fn->_this != NULL) {
           ensureInMethodList(fn);
+        }
+
+        if (forCall != NULL) {
+          resolveAlsoParallelIterators(fn, forCall);
         }
 
       } else {
@@ -533,6 +622,7 @@ static bool isIteratorOfType(FnSymbol* fn, Symbol* iterTag) {
 ************************************** | *************************************/
 
 static bool doNotUnaliasArray(FnSymbol* fn);
+static CallExpr* findSetShape(CallExpr* setRet, Symbol* ret);
 
 static void insertUnrefForArrayOrTupleReturn(FnSymbol* fn) {
   bool skipArray = doNotUnaliasArray(fn);
@@ -567,6 +657,7 @@ static void insertUnrefForArrayOrTupleReturn(FnSymbol* fn) {
           VarSymbol* tmp       = newTemp(arrayUnrefName, rhsType);
           CallExpr*  initTmp   = new CallExpr(PRIM_MOVE,     tmp, rhs);
           CallExpr*  unrefCall = new CallExpr("chpl__unref", tmp);
+          CallExpr*  shapeSet  = findSetShape(call, ret);
           FnSymbol*  unrefFn   = NULL;
 
           // Used by callDestructors to catch assignment from
@@ -594,16 +685,23 @@ static void insertUnrefForArrayOrTupleReturn(FnSymbol* fn) {
             initTmp->remove();
 
             INT_ASSERT(unrefCall->inTree() == false);
+
+            if (shapeSet) setIteratorRecordShape(shapeSet);
+
+          } else if (shapeSet) {
+            // Set the shape on the array unref temp instead of 'ret'.
+            shapeSet->get(1)->replace(new SymExpr(tmp));
+            call->insertBefore(shapeSet->remove());
+            setIteratorRecordShape(shapeSet);
           }
         }
-              }
+      }
     }
   }
 }
 
 static bool doNotUnaliasArray(FnSymbol* fn) {
-  return (fn->hasFlag(FLAG_CONSTRUCTOR) ||
-          fn->hasFlag(FLAG_NO_COPY_RETURN) ||
+  return (fn->hasFlag(FLAG_NO_COPY_RETURN) ||
           fn->hasFlag(FLAG_UNALIAS_FN) ||
           fn->hasFlag(FLAG_RUNTIME_TYPE_INIT_FN) ||
           fn->hasFlag(FLAG_INIT_COPY_FN) ||
@@ -618,14 +716,9 @@ static bool doNotUnaliasArray(FnSymbol* fn) {
 // This function returns true for exceptional FnSymbols
 // where tuples containing refs can be returned.
 //
-// The 'FLAG_CONSTRUCTOR' case can prevent additional copies/leaks in the case
-// that a class/field has a tuple field. See the following test:
-//     types/records/ferguson/tuples/class-tuple-record
-//
 static
 bool doNotChangeTupleTypeRefLevel(FnSymbol* fn, bool forRet) {
   if (fn->hasFlag(FLAG_TYPE_CONSTRUCTOR)         || // _type_construct__tuple
-      fn->hasFlag(FLAG_CONSTRUCTOR)              || // any constructor
       fn->hasFlag(FLAG_INIT_TUPLE)               || // chpl__init_tuple
       fn->hasFlag(FLAG_BUILD_TUPLE)              || // _build_tuple(_allow_ref)
       fn->hasFlag(FLAG_BUILD_TUPLE_TYPE)         || // _build_tuple_type
@@ -645,6 +738,19 @@ bool doNotChangeTupleTypeRefLevel(FnSymbol* fn, bool forRet) {
   } else {
     return false;
   }
+}
+
+// Find the PRIM_ITERATOR_RECORD_SET_SHAPE call following 'setRet'.
+// It should be setting the shape for 'ret'.
+static CallExpr* findSetShape(CallExpr* setRet, Symbol* ret) {
+  for (Expr* curr = setRet->next; curr; curr = curr->next)
+    if (CallExpr* call = toCallExpr(curr))
+      if (call->isPrimitive(PRIM_ITERATOR_RECORD_SET_SHAPE)) {
+        INT_ASSERT(toSymExpr(call->get(1))->symbol() == ret);
+        return call;
+      }
+  // not found
+  return NULL;
 }
 
 /************************************* | **************************************
@@ -782,8 +888,6 @@ static IteratorInfo*  makeIteratorInfo(AggregateType* iClass,
   Type*         defaultInt = dtInt[INT_SIZE_DEFAULT];
   IteratorInfo* ii         = new IteratorInfo();
 
-  ii->tag         = it_iterator;
-
   ii->iterator    = fn;
   ii->iclass      = iClass;
   ii->irecord     = iRecord;
@@ -874,7 +978,7 @@ static void resolveTypeConstructor(FnSymbol* fn) {
   if (at->instantiatedFrom == NULL) {
     instantiateDefaultConstructor(fn);
 
-  } else if (at->initializerStyle          != DEFINES_INITIALIZER &&
+  } else if (at->hasUserDefinedInit        == false &&
              at->wantsDefaultInitializer() == false) {
     instantiateDefaultConstructor(fn);
   }
@@ -1098,7 +1202,7 @@ void resolveReturnTypeAndYieldedType(FnSymbol* fn, Type** yieldedType) {
   Vec<Type*>   retTypes;
   Vec<Symbol*> retSymbols;
 
-  if (retType == dtUnknown) {
+  if (isUnresolvedOrGenericReturnType(retType)) {
 
     computeReturnTypeParamVectors(fn, ret, retTypes, retSymbols);
 
@@ -1331,16 +1435,11 @@ bool formalRequiresTemp(ArgSymbol* formal, FnSymbol* fn) {
 
 bool shouldAddFormalTempAtCallSite(ArgSymbol* formal, FnSymbol* fn) {
   if (isRecord(formal->getValType())) {
-    // For now, rule out default ctor/init/_new
-    if (fn->hasFlag(FLAG_DEFAULT_CONSTRUCTOR))
-      return false; // old strategy for old-path in wrapAndCleanUpActuals
-    else {
-      if (formal->intent == INTENT_IN ||
-          formal->intent == INTENT_CONST_IN ||
-          formal->originalIntent == INTENT_IN ||
-          formal->originalIntent == INTENT_CONST_IN)
-        return true;
-    }
+    if (formal->intent == INTENT_IN ||
+        formal->intent == INTENT_CONST_IN ||
+        formal->originalIntent == INTENT_IN ||
+        formal->originalIntent == INTENT_CONST_IN)
+      return true;
   }
 
   return false;
@@ -1631,8 +1730,10 @@ void insertAndResolveCasts(FnSymbol* fn) {
 }
 
 static void insertCasts(BaseAST* ast, FnSymbol* fn, Vec<CallExpr*>& casts) {
+  if (isSymbol(ast) && ! isShadowVarSymbol(ast))
+    return; // do not descend into nested symbols
+
   if (CallExpr* call = toCallExpr(ast)) {
-    if (call->parentSymbol == fn) {
       if (call->isPrimitive(PRIM_MOVE)) {
         if (SymExpr* lhs = toSymExpr(call->get(1))) {
           Type* lhsType = lhs->symbol()->type;
@@ -1761,6 +1862,13 @@ static void insertCasts(BaseAST* ast, FnSymbol* fn, Vec<CallExpr*>& casts) {
                 resolveExpr(moveInit);
                 resolveExpr(assign);
 
+                // Enable error messages assignment between local
+                // and distributed domains. It would be better if this
+                // could be handled by some flavor of initializer.
+                CallExpr* check = new CallExpr("chpl_checkCopyInit", to, from);
+                call->insertBefore(check);
+                resolveExpr(check);
+
                 // We've replaced the move with no-init/assign, so remove it.
                 call->remove();
 
@@ -1877,7 +1985,6 @@ static void insertCasts(BaseAST* ast, FnSymbol* fn, Vec<CallExpr*>& casts) {
           }
         }
       }
-    }
   }
 
   AST_CHILDREN_CALL(ast, insertCasts, fn, casts);

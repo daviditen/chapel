@@ -5,10 +5,6 @@ import os
 import platform
 from string import punctuation
 from sys import stderr, stdout
-import sys
-
-chplenv_dir = os.path.dirname(__file__)
-sys.path.insert(0, os.path.abspath(chplenv_dir))
 
 import chpl_comm, chpl_compiler, chpl_platform, overrides
 from compiler_utils import CompVersion, compiler_is_prgenv, get_compiler_version
@@ -256,7 +252,7 @@ class argument_map(object):
             return 'none'
         elif compiler == 'intel':
             return cls.intel.get(arch, '')
-        elif compiler in ['clang', 'clang-included']:
+        elif compiler in ['clang', 'clang-included', 'allinea']:
             # Clang doesn't know how to do architecture detection for aarch64.
             if arch == 'native':
                 if get_native_machine() == 'aarch64':

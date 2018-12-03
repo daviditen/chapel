@@ -75,6 +75,10 @@ else
     log_info "Found executable ${BIN_NAME} in ${CHPL_BIN}."
 fi
 
+if [ -z "${CHPL_HOME}" ] ; then
+  CHPL_HOME=${CHPL_CHECK_HOME}
+fi
+
 # Verify CHPL_HOME is correctly set.
 if [ -z "${CHPL_HOME}" ] ; then
     log_error "CHPL_HOME is not set in environment."
@@ -150,7 +154,7 @@ TEST_JOB=${TEST_JOB_BASENAME}
 
 if [ "${CHPL_CHECK_DEBUG}" == 1 ] ; then
     log_debug "printchplenv, because \$CHPL_CHECK_DEBUG == 1"
-    $CHPL_HOME/util/printchplenv
+    $CHPL_HOME/util/printchplenv --all --no-tidy
 fi
 
 # Collect comm protocol environment variables (lowercase to avoid conflicts)

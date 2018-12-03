@@ -243,6 +243,23 @@ When a ``sparse subdomain`` is created for a ``Block`` distributed domain, the
 ``sparseLayoutType`` will be the layout of these sparse domains. The default is
 currently coordinate, but :class:`LayoutCS.CS` is an interesting alternative.
 
+**Convenience Initializer Functions**
+
+It is common for a ``Block`` distribution to distribute its ``boundingBox``
+across all locales. In this case, a convenience function can be used to
+declare variables of block-distributed domain or array type.  These functions
+take a domain or list of ranges as arguments and return a block-distributed
+domain or array.
+
+  .. code-block:: chapel
+
+    use BlockDist;
+
+    var BlockDom1 = newBlockDom({1..5, 1..5});
+    var BlockArr1 = newBlockArr({1..5, 1..5}, real);
+    var BlockDom2 = newBlockDom(1..5, 1..5);
+    var BlockArr2 = newBlockArr(1..5, 1..5, real);
+
 **Data-Parallel Iteration**
 
 A `forall` loop over a Block-distributed domain or array
@@ -266,7 +283,7 @@ This example demonstrates a Block-distributed sparse domain and array:
 
   .. code-block:: chapel
 
-   use BlockDist;
+    use BlockDist;
 
     const Space = {1..8, 1..8};
 
@@ -337,7 +354,6 @@ class LocBlock {
 // locDoms:   a non-distributed array of local domain classes
 // whole:     a non-distributed domain that defines the domain's indices
 //
-pragma "use default init"
 class BlockDom: BaseRectangularDom {
   type sparseLayoutType;
   const dist: unmanaged Block(rank, idxType, sparseLayoutType);
@@ -353,7 +369,6 @@ class BlockDom: BaseRectangularDom {
 // stridable: generic domain stridable parameter
 // myBlock: a non-distributed domain that defines the local indices
 //
-pragma "use default init"
 class LocBlockDom {
   param rank: int;
   type idxType;
@@ -372,7 +387,6 @@ class LocBlockDom {
 // locArr: a non-distributed array of local array classes
 // myLocArr: optimized reference to here's local array class (or nil)
 //
-pragma "use default init"
 class BlockArr: BaseRectangularArr {
   type sparseLayoutType;
   var doRADOpt: bool = defaultDoRADOpt;
@@ -393,7 +407,6 @@ class BlockArr: BaseRectangularArr {
 // locDom: reference to local domain class
 // myElems: a non-distributed array of local elements
 //
-pragma "use default init"
 class LocBlockArr {
   type eltType;
   param rank: int;
@@ -403,8 +416,7 @@ class LocBlockArr {
   var locRAD: unmanaged LocRADCache(eltType, rank, idxType, stridable); // non-nil if doRADOpt=true
   pragma "local field"
   var myElems: [locDom.myBlock] eltType;
-  var locRADLock: atomicbool; // This will only be accessed locally
-                              // force the use of processor atomics
+  var locRADLock: chpl__processorAtomicType(bool); // only accessed locally
 
   // These functions will always be called on this.locale, and so we do
   // not have an on statement around the while loop below (to avoid
@@ -527,7 +539,7 @@ override proc Block.dsiDestroyDist() {
   }
 }
 
-proc Block.dsiDisplayRepresentation() {
+override proc Block.dsiDisplayRepresentation() {
   writeln("boundingBox = ", boundingBox);
   writeln("targetLocDom = ", targetLocDom);
   writeln("targetLocales = ", for tl in targetLocales do tl.id);
@@ -662,7 +674,7 @@ proc LocBlock.init(param rank: int,
 
 override proc BlockDom.dsiMyDist() return dist;
 
-proc BlockDom.dsiDisplayRepresentation() {
+override proc BlockDom.dsiDisplayRepresentation() {
   writeln("whole = ", whole);
   for tli in dist.targetLocDom do
     writeln("locDoms[", tli, "].myBlock = ", locDoms[tli].myBlock);
@@ -741,9 +753,8 @@ iter BlockDom.these(param tag: iterKind) where tag == iterKind.leader {
       locOffset(i) = tmpBlock.dim(i).first / stride:idxType;
     }
     // Forward to defaultRectangular
-    for followThis in tmpBlock._value.these(iterKind.leader, maxTasks,
-                                            myIgnoreRunning, minSize,
-                                            locOffset) do
+    for followThis in tmpBlock.these(iterKind.leader, maxTasks,
+                                     myIgnoreRunning, minSize, locOffset) do
       yield followThis;
   }
 }
@@ -871,7 +882,7 @@ proc BlockDom.setup() {
   }
 }
 
-proc BlockDom.dsiDestroyDom() {
+override proc BlockDom.dsiDestroyDom() {
   coforall localeIdx in dist.targetLocDom do {
     on locDoms(localeIdx) do
       delete locDoms(localeIdx);
@@ -879,7 +890,7 @@ proc BlockDom.dsiDestroyDom() {
 }
 
 proc BlockDom.dsiMember(i) {
-  return whole.member(i);
+  return whole.contains(i);
 }
 
 proc BlockDom.dsiIndexOrder(i) {
@@ -889,9 +900,9 @@ proc BlockDom.dsiIndexOrder(i) {
 //
 // Added as a performance stopgap to avoid returning a domain
 //
-proc LocBlockDom.member(i) return myBlock.member(i);
+proc LocBlockDom.contains(i) return myBlock.contains(i);
 
-proc BlockArr.dsiDisplayRepresentation() {
+override proc BlockArr.dsiDisplayRepresentation() {
   for tli in dom.dist.targetLocDom {
     writeln("locArr[", tli, "].myElems = ", for e in locArr[tli].myElems do e);
     if doRADOpt then
@@ -961,7 +972,7 @@ inline proc BlockArr.dsiLocalAccess(i: rank*idxType) ref {
 //
 inline proc BlockArr.dsiAccess(const in idx: rank*idxType) ref {
   local {
-    if myLocArr != nil && myLocArr.locDom.member(idx) then
+    if myLocArr != nil && myLocArr.locDom.contains(idx) then
       return myLocArr.this(idx);
   }
   return nonLocalAccess(idx);
@@ -1077,12 +1088,18 @@ iter BlockArr.these(param tag: iterKind, followThis, param fast: bool = false) r
       arrSection = myLocArr;
 
     //
+    // Forcibly narrow the array section. We know it's narrow because we're in
+    // a fast follower, but the compiler can't determine this currently.
+    //
+    const narrowArrSection = __primitive("_wide_get_addr", arrSection):arrSection.type;
+
+    //
     // Slicing arrSection.myElems will require reference counts to be updated.
     // If myElems is an array of arrays, the inner array's domain or dist may
     // live on a different locale and require communication for reference
     // counting. Simply put: don't slice inside a local block.
     //
-    ref chunk = arrSection.myElems(myFollowThisDom);
+    ref chunk = narrowArrSection.myElems(myFollowThisDom);
     local {
       for i in chunk do yield i;
     }
@@ -1254,7 +1271,6 @@ proc Block.dsiReprivatize(other, reprivatizeData) {
 
 proc BlockDom.dsiSupportsPrivatization() param return true;
 
-pragma "use default init"
 record BlockDomPrvData {
   var distpid;
   var dims;
@@ -1630,4 +1646,22 @@ where useBulkTransferDist {
   }
 
   return true;
+}
+
+proc newBlockDom(dom: domain) {
+  return dom dmapped Block(dom);
+}
+
+proc newBlockArr(dom: domain, type eltType) {
+  var D = newBlockDom(dom);
+  var A: [D] eltType;
+  return A;
+}
+
+proc newBlockDom(rng: range...) {
+  return newBlockDom({(...rng)});
+}
+
+proc newBlockArr(rng: range..., type eltType) {
+  return newBlockArr({(...rng)}, eltType);
 }

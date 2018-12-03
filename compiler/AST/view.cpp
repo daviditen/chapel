@@ -48,6 +48,18 @@
 int  debugShortLoc  = true;
 bool whocalls_nview = false;
 
+static void print_indent(int indent) {
+  for (int i = 0; i < indent; i++) printf(" ");
+}
+
+static void print_on_its_own_line(int indent, const char* msg,
+                                  bool newline = true) {
+  if (newline) printf("\n");
+  printf("%6c", ' ');
+  print_indent(indent);
+  printf("%s", msg);
+}
+
 static void
 list_sym(Symbol* sym, bool type = true) {
   if (VarSymbol* var = toVarSymbol(sym)) {
@@ -102,7 +114,7 @@ forall_explanation_start(BaseAST* ast, BaseAST* parentAst) {
   if (LoopExpr* fe = toLoopExpr(parentAst)) {
     if (ast == fe->iteratorExpr)
       return ") in( ";
-    if (ast == fe->expr)
+    if (ast == fe->loopBody)
       return ") { ";
     if (ast == fe->cond)
       return "} if( ";
@@ -111,6 +123,80 @@ forall_explanation_start(BaseAST* ast, BaseAST* parentAst) {
     return "defer\n";
   }
   return NULL;
+}
+
+static void forallPreamble(Expr* expr, BaseAST* parentAst, int indent) {
+  if (ForallStmt* pfs = toForallStmt(parentAst)) {
+    if (expr == pfs->fRecIterIRdef) {
+      print_on_its_own_line(indent, "fRecIterIRdef et al.\n", pfs->zippered());
+    } else if (expr == pfs->loopBody()) {
+      if (pfs->numShadowVars() == 0)
+        print_on_its_own_line(indent, "with() do\n", !pfs->fRecIterIRdef);
+      else
+        print_on_its_own_line(indent, "do\n", false);
+    }
+  } else if (ShadowVarSymbol* svar = toShadowVarSymbol(parentAst)) {
+    if (expr == svar->outerVarSE                          ||
+        ( expr == svar->initBlock() && !svar->outerVarSE ) )
+      printf("\n");
+  }
+}
+
+static void forallPostamble(Expr* expr, ForallStmt* pfs, int indent) {
+  if (AList* list = expr->list) {
+    if (list == &pfs->inductionVariables()  ||
+        list == &pfs->iteratedExpressions() ) {
+      if (expr != list->tail)
+        printf("\n");
+      if (expr == pfs->inductionVariables().tail) {
+        print_on_its_own_line(indent, pfs->zippered() ? "in zip\n" : "in\n");
+      } else if (expr == pfs->iteratedExpressions().tail &&
+                 pfs->numShadowVars() > 0) {
+        print_on_its_own_line(indent, "with\n");
+      }
+    }
+  } else {
+    if (expr == pfs->fRecIterIRdef        ||
+        expr == pfs->fRecIterICdef        ||
+        expr == pfs->fRecIterGetIterator  ||
+        expr == pfs->fRecIterFreeIterator )
+      printf("\n");
+
+  }
+}
+
+static void usePostamble(UseStmt* use, int indent) {
+  if (use->isPlainUse())
+    return;
+
+  if (use->hasExceptList()) {
+    printf("except ");
+  } else {
+    printf("only ");
+  }
+
+  bool first = true;
+
+  for_vector(const char, str, use->named) {
+    if (first) {
+      first = false;
+    } else {
+      printf(", ");
+    }
+    printf("%s", str);
+  }
+
+  for (std::map<const char*, const char*>::iterator it = use->renamed.begin();
+       it != use->renamed.end(); ++it) {
+    if (first) {
+      first = false;
+    } else {
+      printf(", ");
+    }
+    printf("%s as %s", it->second, it->first);
+  }
+
+  printf("\n");
 }
 
 static bool
@@ -129,34 +215,13 @@ list_line(Expr* expr, BaseAST* parentAst) {
   return false;
 }
 
-static void print_indent(int indent) {
-  for (int i = 0; i < indent; i++) printf(" ");
-}
-static void print_on_its_own_line(int indent, const char* msg,
-                                  bool newline = true) {
-  if (newline) printf("\n");
-  printf("%6c", ' ');
-  print_indent(indent);
-  printf("%s", msg);
-}
-
 static void
 list_ast(BaseAST* ast, BaseAST* parentAst = NULL, int indent = 0) {
   bool do_list_line = false;
   bool is_C_loop = false;
   const char* block_explain = NULL;
   if (Expr* expr = toExpr(ast)) {
-    if (ForallStmt* pfs = toForallStmt(parentAst)) {
-      if (expr == pfs->fRecIterIRdef) {
-        printf("fRecIterIRdef");
-      } else if (expr == pfs->loopBody()) {
-        if (pfs->numShadowVars() == 0)
-          print_on_its_own_line(indent, "with() do\n");
-        else
-          print_on_its_own_line(indent, "do\n", false);
-        indent -= 2;
-      }
-    }
+    forallPreamble(expr, parentAst, indent);
     do_list_line = !parentAst || list_line(expr, parentAst);
     if (do_list_line) {
       printf("%-7d ", expr->id);
@@ -248,53 +313,18 @@ list_ast(BaseAST* ast, BaseAST* parentAst = NULL, int indent = 0) {
         printf("}\n");
       if (isForallLoopBody(expr) && parentAst != NULL) {
         print_indent(indent);
-        printf("        end forall %d", parentAst->id);
+        printf("      end forall %d", parentAst->id);
       }
     } else if (LoopExpr* e = toLoopExpr(expr)) {
       if (e->cond) printf(") ");
       else         printf("} ");
     } else if (UseStmt* use = toUseStmt(expr)) {
-      if (!use->isPlainUse()) {
-        if (use->hasExceptList()) {
-          printf("except ");
-        } else {
-          printf("only ");
-        }
-        bool first = true;
-        for_vector(const char, str, use->named) {
-          if (first) {
-            first = false;
-          } else {
-            printf(", ");
-          }
-          printf("%s", str);
-        }
-
-        for (std::map<const char*, const char*>::iterator it = use->renamed.begin();
-             it != use->renamed.end(); ++it) {
-          if (first) {
-            first = false;
-          } else {
-            printf(", ");
-          }
-          printf("%s as %s", it->second, it->first);
-        }
-        printf("\n");
-      }
+      usePostamble(use, indent);
     } else if (CondStmt* cond = toCondStmt(parentAst)) {
       if (cond->condExpr == expr)
         printf("\n");
     } else if (ForallStmt* pfs = toForallStmt(parentAst)) {
-      if (AList* list = expr->list)
-        if (list->parent == pfs)
-          if (expr != list->tail)
-            printf("\n");
-      if (expr == pfs->inductionVariables().tail) {
-        print_on_its_own_line(indent, pfs->zippered() ? "in zip\n" : "in\n");
-      } else if (expr == pfs->iteratedExpressions().tail &&
-                 pfs->numShadowVars() > 0) {
-        print_on_its_own_line(indent, "with\n");
-      }
+      forallPostamble(expr, pfs, indent);
     } else if (!toCondStmt(expr) && do_list_line) {
       DefExpr* def = toDefExpr(expr);
       if (!(def && early_newline))
@@ -470,14 +500,18 @@ view_ast(BaseAST* ast, bool number = false, int mark = -1, int indent = 0) {
     view_sym(sym, number, mark);
   }
 
-  AST_CHILDREN_CALL(ast, view_ast, number, mark, indent+2);
-
   if (DefExpr* def = toDefExpr(ast)) {
     printf(" ");
     if (ArgSymbol* arg = toArgSymbol(def->sym))
       printf("intent-%s ", arg->intentDescrString());
+    if (ShadowVarSymbol* sv = toShadowVarSymbol(def->sym)) {
+      printf("shadow-%s ", sv->intentDescrString());
+    }
+
     writeFlags(stdout, def->sym);
   }
+
+  AST_CHILDREN_CALL(ast, view_ast, number, mark, indent+2);
 
   if (toExpr(ast))
     printf(")");
@@ -908,21 +942,27 @@ void fnsWithName(const char* name, Vec<FnSymbol*,VEC_INTEGRAL_SIZE>& fnVec) {
 }
 
 //
-// whocalls: print all CallExprs whose baseExpr is the given SymExpr or Symbol
+// whocalls: print all ways that the AST with the given 'id' is invoked
 //
+static void whocalls(int id, Symbol* sym);
+
 void whocalls(BaseAST* ast) {
   if (!ast) {
     printf("whocalls: aborting: got NULL\n");
     return;
   }
-  printf("whocalls(%s[%d])\n", ast->astTagAsString(), ast->id);
-  if (SymExpr* se = toSymExpr(ast)) {
-    whocalls(se->symbol()->id);
-  } else if (isSymbol(ast)) {
-    whocalls(ast->id);
-  } else {
-    printf("whocalls: aborting: need a SymExpr or Symbol\n");
-  }
+  Symbol* sym = NULL;
+  if (SymExpr* se = toSymExpr(ast))
+    sym = se->symbol();
+  else if (DefExpr* def = toDefExpr(ast))
+    sym = def->sym;
+  else if (Symbol* symm = toSymbol(ast))
+    sym = symm;
+
+  if (sym == NULL)
+    printf("whocalls: aborting: need a SymExpr or DefExpr or Symbol\n");
+  else
+    whocalls(ast->id, sym);
 }
 
 static char* parentMsg(Expr* expr, int* cntInTreeP, int* cntNonTreeP) {
@@ -937,8 +977,20 @@ static char* parentMsg(Expr* expr, int* cntInTreeP, int* cntNonTreeP) {
   return result;
 }
 
-// 'id' better be a Symbol
 void whocalls(int id) {
+  whocalls(id, NULL);
+}
+
+// 'sym' is used to print the function name
+static void whocalls(int id, Symbol* sym) {
+  if (sym == NULL)
+    printf("whocalls [%d]\n", id);
+  else if (sym->id == id)
+    printf("whocalls %s %s[%d]\n", sym->astTagAsString(), sym->name, id);
+  else
+    printf("whocalls [%d]  ignoring %s %s[%d]\n",
+           id, sym->astTagAsString(), sym->name, sym->id);
+  
   int callAll = 0, callMatch = 0, callNonTreeMatch = 0;
   forv_Vec(CallExpr, call, gCallExprs) {
     if (SymExpr* se = toSymExpr(call->baseExpr)) {
@@ -1012,6 +1064,7 @@ void whocalls(int id) {
   int forNontree = forNonTreeMatch + fItNonTreeMatch;
   if (forNontree) printf(", also %d not in tree", forNontree);
   printf(".  %d of %d in VMT+FT.\n", vmtMatch+ftMatch, vmtAll+ftAll);
+  printf("\n");
 }
 
 FnSymbol* debugGetTheIteratorFn(int id) {
@@ -1035,7 +1088,8 @@ FnSymbol* debugGetTheIteratorFn(BaseAST* ast) {
   else if (SymExpr* se = toSymExpr(ast))
     return debugGetTheIteratorFn(se->symbol());
   else {
-    printf("<don't know how to get the iterator for node %d>\n", ast->id);
+    printf("<don't know how to get the iterator for node %s %d>\n",
+           ast->astTagAsString(), ast->id);
     return NULL;
   }
 }

@@ -111,14 +111,14 @@ module GMP {
 
   require "GMPHelper/chplgmp.h";
 
-  export proc chpl_gmp_alloc(size:size_t) : c_void_ptr {
+  proc chpl_gmp_alloc(size:size_t) : c_void_ptr {
     pragma "insert line file info"
     extern proc chpl_mem_alloc(size:size_t, md:chpl_mem_descInt_t) : c_void_ptr;
     extern const CHPL_RT_MD_GMP:chpl_mem_descInt_t;
     return chpl_mem_alloc(size, CHPL_RT_MD_GMP);
   }
 
-  export proc chpl_gmp_realloc(ptr:c_void_ptr,
+  proc chpl_gmp_realloc(ptr:c_void_ptr,
                                old_size:size_t, new_size:size_t) : c_void_ptr {
     pragma "insert line file info"
     extern proc chpl_mem_realloc(ptr:c_void_ptr, size:size_t, md:chpl_mem_descInt_t) : c_void_ptr;
@@ -126,7 +126,7 @@ module GMP {
     return chpl_mem_realloc(ptr, new_size, CHPL_RT_MD_GMP);
   }
 
-  export proc chpl_gmp_free(ptr:c_void_ptr, old_size:size_t) {
+  proc chpl_gmp_free(ptr:c_void_ptr, old_size:size_t) {
     pragma "insert line file info"
       extern proc chpl_mem_free(ptr:c_void_ptr) : void;
     chpl_mem_free(ptr);
@@ -680,11 +680,11 @@ module GMP {
   extern proc mpz_cmp_d(const ref op1: mpz_t,
                         op2: c_double) : c_int;
 
-  extern chpl_mpz_cmp_si
+  extern "chpl_mpz_cmp_si"
          proc mpz_cmp_si(const ref op1: mpz_t,
                          op2: c_long) : c_int;
 
-  extern chpl_mpz_cmp_ui
+  extern "chpl_mpz_cmp_ui"
          proc mpz_cmp_ui(const ref op1: mpz_t,
                          op2: c_ulong) : c_int;
 
@@ -697,7 +697,7 @@ module GMP {
   extern proc mpz_cmpabs_ui(const ref op1: mpz_t,
                             op2: c_ulong) : c_int;
 
-  extern chpl_mpz_sgn
+  extern "chpl_mpz_sgn"
          proc mpz_sgn(const ref op: mpz_t) : c_int;
 
 
@@ -793,10 +793,10 @@ module GMP {
 
   extern proc mpz_fits_sshort_p(const ref op: mpz_t) : c_int;
 
-  extern chpl_mpz_odd_p
+  extern "chpl_mpz_odd_p"
          proc mpz_odd_p(const ref op: mpz_t) : c_int;
 
-  extern chpl_mpz_even_p
+  extern "chpl_mpz_even_p"
          proc mpz_even_p(const ref op: mpz_t) : c_int;
 
   extern proc mpz_sizeinbase(const ref op: mpz_t,
@@ -1114,7 +1114,7 @@ module GMP {
 
 
   /* Get an MPZ value stored on another locale */
-  export proc chpl_gmp_get_mpz(ref ret: mpz_t,
+  proc chpl_gmp_get_mpz(ref ret: mpz_t,
                         src_locale: int,
                         in from: __mpz_struct,
                         copy_allocated:bool = false) {
@@ -1223,6 +1223,7 @@ module GMP {
       gmp_randinit_lc_2exp_size(this.state, size.safeCast(c_ulong));
     }
 
+    pragma "no doc"
     proc deinit() {
       on this {
         gmp_randclear(this.state);

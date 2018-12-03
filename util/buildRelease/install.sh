@@ -230,7 +230,7 @@ myinstallfileto () {
 # copy chpl
 if [ ! -z "$PREFIX" ]
 then
-  # TODO -- handle chpldoc and chpl-ipe
+  # TODO -- handle chpldoc
   #   these are symbol links to chpl
   myinstallfile "bin/$CHPL_HOST_PLATFORM"/chpl "$PREFIX/bin"
 else
@@ -271,6 +271,10 @@ myinstallfile util/config/compileline "$DEST_CHPL_HOME"/util/config/
 # copy util/config/fixpath.py
 # (needed by setchplenv*)
 myinstallfile util/config/fixpath.py  "$DEST_CHPL_HOME"/util/config/
+
+# copy util/config/replace-paths.py
+# (needed by --library --library-makefile compilations)
+myinstallfile util/config/replace-paths.py  "$DEST_CHPL_HOME"/util/config/
 
 
 if [ ! -z "$DEST_DIR" ]

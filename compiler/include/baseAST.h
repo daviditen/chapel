@@ -307,6 +307,8 @@ void   trace_remove(BaseAST* ast, char flag);
 void verifyInTree(BaseAST* ast, const char* msg);
 
 
+VarSymbol* createASTforLineNumber(const char* filename, int line);
+
 //
 // macro to update the global line number used to set the line number
 // of an AST node when it is constructed - or to print out the line
@@ -568,12 +570,12 @@ static inline const CallExpr* toConstCallExpr(const BaseAST* a)
   case E_ContextCallExpr:                                               \
     AST_CALL_LIST(_a, ContextCallExpr, options, call, __VA_ARGS__);     \
     break;                                                              \
-  case E_LoopExpr:                                                    \
-    AST_CALL_LIST(_a, LoopExpr, defIndices, call, __VA_ARGS__);       \
-    AST_CALL_CHILD(_a, LoopExpr, indices,      call, __VA_ARGS__);    \
-    AST_CALL_CHILD(_a, LoopExpr, iteratorExpr, call, __VA_ARGS__);    \
-    AST_CALL_CHILD(_a, LoopExpr, expr,         call, __VA_ARGS__);    \
-    AST_CALL_CHILD(_a, LoopExpr, cond,         call, __VA_ARGS__);    \
+  case E_LoopExpr:                                                      \
+    AST_CALL_LIST(_a,  LoopExpr, defIndices,   call, __VA_ARGS__);      \
+    AST_CALL_CHILD(_a, LoopExpr, indices,      call, __VA_ARGS__);      \
+    AST_CALL_CHILD(_a, LoopExpr, iteratorExpr, call, __VA_ARGS__);      \
+    AST_CALL_CHILD(_a, LoopExpr, cond,         call, __VA_ARGS__);      \
+    AST_CALL_CHILD(_a, LoopExpr, loopBody,     call, __VA_ARGS__);      \
     break;                                                              \
   case E_NamedExpr:                                                     \
     AST_CALL_CHILD(_a, NamedExpr, actual, call, __VA_ARGS__);           \

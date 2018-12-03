@@ -209,8 +209,6 @@ bool SafeExprAnalysis::fnHasNoSideEffects(FnSymbol* fnSym) {
     case PRIM_COERCE:
     case PRIM_CALL_RESOLVES:
     case PRIM_METHOD_CALL_RESOLVES:
-    case PRIM_ENUM_MIN_BITS:
-    case PRIM_ENUM_IS_SIGNED:
     case PRIM_GET_COMPILER_VAR:
 */
 bool SafeExprAnalysis::isSafePrimitive(CallExpr* ce) {
@@ -269,7 +267,6 @@ bool SafeExprAnalysis::isSafePrimitive(CallExpr* ce) {
     case PRIM_DEREF:
     case PRIM_PTR_EQUAL:
     case PRIM_PTR_NOTEQUAL:
-    case PRIM_IS_SUBTYPE:
     case PRIM_DYNAMIC_CAST:
     case PRIM_ARRAY_GET:
     case PRIM_ARRAY_GET_VALUE:
@@ -280,11 +277,13 @@ bool SafeExprAnalysis::isSafePrimitive(CallExpr* ce) {
     case PRIM_IS_WIDE_PTR:
     case PRIM_CAPTURE_FN_FOR_CHPL:
     case PRIM_CAPTURE_FN_FOR_C:
-    case PRIM_GET_PRIV_CLASS:
     case PRIM_GET_SVEC_MEMBER:
     case PRIM_GET_SVEC_MEMBER_VALUE:
     case PRIM_STACK_ALLOCATE_CLASS:
     case PRIM_GET_DYNAMIC_END_COUNT:
+    case PRIM_INVARIANT_START:
+    case PRIM_NO_ALIAS_SET:
+    case PRIM_COPIES_NO_ALIAS_SET:
       return true;
     case PRIM_UNKNOWN:
       if(strcmp(prim->name, "string_length") == 0 ||

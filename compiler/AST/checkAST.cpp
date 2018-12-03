@@ -120,13 +120,14 @@ void checkPrimitives()
      case PRIM_FIELD_NUM_TO_NAME:
      case PRIM_FIELD_NAME_TO_NUM:
      case PRIM_FIELD_BY_NUM:
-     case PRIM_ENUM_MIN_BITS:
-     case PRIM_ENUM_IS_SIGNED:
      case PRIM_IS_RECORD_TYPE:
      case PRIM_IS_UNION_TYPE:
      case PRIM_IS_ATOMIC_TYPE:
      case PRIM_IS_TUPLE_TYPE:
      case PRIM_IS_STAR_TUPLE_TYPE:
+     case PRIM_IS_SUBTYPE:
+     case PRIM_IS_SUBTYPE_ALLOW_VALUES:
+     case PRIM_IS_PROPER_SUBTYPE:
      case PRIM_NEW:                 // new keyword
      case PRIM_ERROR:
      case PRIM_WARNING:
@@ -243,14 +244,14 @@ void checkPrimitives()
      case PRIM_INIT_FIELDS:             // initialize fields of a temporary record
      case PRIM_PTR_EQUAL:
      case PRIM_PTR_NOTEQUAL:
-     case PRIM_IS_SUBTYPE:
      case PRIM_CAST:
      case PRIM_DYNAMIC_CAST:
      case PRIM_TYPEOF:
      case PRIM_USED_MODULES_LIST:       // used modules in BlockStmt::modUses
      case PRIM_TUPLE_EXPAND:
      case PRIM_CHPL_COMM_GET:           // Direct calls to the Chapel comm layer
-     case PRIM_CHPL_COMM_PUT:           // may eventually add others (e.g.: non-blocking)
+     case PRIM_CHPL_COMM_BUFF_GET:
+     case PRIM_CHPL_COMM_PUT:
      case PRIM_CHPL_COMM_ARRAY_GET:
      case PRIM_CHPL_COMM_ARRAY_PUT:
      case PRIM_CHPL_COMM_REMOTE_PREFETCH:
@@ -295,7 +296,6 @@ void checkPrimitives()
      case PRIM_RT_ERROR:
      case PRIM_RT_WARNING:
      case PRIM_NEW_PRIV_CLASS:
-     case PRIM_GET_PRIV_CLASS:
      case PRIM_GET_USER_LINE:
      case PRIM_GET_USER_FILE:
      case PRIM_FTABLE_CALL:

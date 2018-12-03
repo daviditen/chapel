@@ -21,6 +21,7 @@
 #define _EXPR_H_
 
 #include "baseAST.h"
+#include "driver.h"
 
 #include "primitive.h"
 #include "symbol.h"
@@ -290,6 +291,7 @@ static inline bool isAlive(Symbol* symbol) {
 }
 
 static inline bool isAlive(Type* type) {
+  if (fMinimalModules && type == dtString) return false;
   return isAlive(type->symbol->defPoint);
 }
 
@@ -309,6 +311,10 @@ static inline bool isTaskFun(FnSymbol* fn) {
   return fn->hasFlag(FLAG_BEGIN) ||
          fn->hasFlag(FLAG_COBEGIN_OR_COFORALL) ||
          fn->hasFlag(FLAG_ON);
+}
+
+static inline bool isLoopExprFun(FnSymbol* fn) {
+  return 0 == strncmp(fn->name, astr_loopexpr_iter, strlen(astr_loopexpr_iter));
 }
 
 // Does this function require "capture for parallelism"?

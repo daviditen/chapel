@@ -34,12 +34,6 @@ enum AggregateTag {
   AGGREGATE_UNION
 };
 
-enum InitializerStyle {
-  DEFINES_CONSTRUCTOR,
-  DEFINES_INITIALIZER,
-  DEFINES_NONE_USE_DEFAULT
-};
-
 
 class AggregateType : public Type {
 public:
@@ -63,8 +57,23 @@ public:
   bool                        isRecord()                                 const;
   bool                        isUnion()                                  const;
 
+  // is it a generic type (e.g. contains a type field with or without default)
+  // e.g. this would return true for
+  //    class C { type t = int; }
+  //    class C { type t; }
+  //    class C { param p; }
+  //    class C { var x; }
   bool                        isGeneric()                                const;
   void                        markAsGeneric();
+
+  // is it a generic type with defaults for all type/param fields?
+  // these don't behave the same as fully generic types.
+  // For example, returns true for
+  //    class C { type t = int; }
+  // and false for
+  //    class C { type t; }
+  bool                        isGenericWithDefaults()                    const;
+  void                        markAsGenericWithDefaults();
 
   const char*                 classStructName(bool standalone);
 
@@ -124,16 +133,11 @@ public:
 
   int                         getMemberGEP(const char* name);
 
-  void                        createOuterWhenRelevant();
-
-  // intended to be called during scope resolve
-  void                        buildConstructors();
+  FnSymbol*                   buildTypeConstructor();
 
   void                        addRootType();
 
   void                        addClassToHierarchy();
-
-  bool                        parentDefinesInitializer()                 const;
 
   bool                        wantsDefaultInitializer()                  const;
 
@@ -149,7 +153,8 @@ public:
 
   // Returns true if a field is considered generic
   // (i.e. it needs a type constructor argument)
-  bool                        fieldIsGeneric(Symbol* field)              const;
+  bool                        fieldIsGeneric(Symbol* field,
+                                             bool &hasDefault)           const;
 
 
   //
@@ -169,7 +174,7 @@ public:
 
   AggregateType*              instantiatedFrom;
 
-  InitializerStyle            initializerStyle;
+  bool                        hasUserDefinedInit;
 
   bool                        initializerResolved;
 
@@ -177,9 +182,6 @@ public:
 
   // used from parsing, sets dispatchParents
   AList                       inherits;
-
-  // pointer to an outer class if this is an inner class
-  Symbol*                     outer;
 
   // Attached only to iterator class/records
   IteratorInfo*               iteratorInfo;
@@ -223,8 +225,6 @@ private:
 
   AggregateType*              discoverParentAndCheck(Expr* storesName);
 
-  FnSymbol*                   buildTypeConstructor();
-
   CallExpr*                   typeConstrSuperCall(FnSymbol* fn)  const;
 
   bool                        isFieldInThisClass(const char* name)       const;
@@ -241,13 +241,9 @@ private:
   ArgSymbol*                  insertGenericArg(FnSymbol*  fn,
                                                VarSymbol* field)  const;
 
-  void                        buildConstructor();
-
-public:
-  bool                        needsConstructor() const;
 private:
 
-  ArgSymbol*                  moveConstructorToOuter(FnSymbol* fn);
+  void                        moveTypeConstructorToOuter(FnSymbol* fn);
 
   void                        fieldToArg(FnSymbol*              fn,
                                          std::set<const char*>& names,
@@ -272,11 +268,13 @@ private:
   int                         genericField;
 
   bool                        mIsGeneric;
+  bool                        mIsGenericWithDefaults;
 };
 
 extern AggregateType* dtObject;
 
 extern AggregateType* dtString;
+extern AggregateType* dtLocale;
 
 DefExpr* defineObjectClass();
 

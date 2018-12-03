@@ -32,14 +32,13 @@ class ForallStmt : public Stmt
 public:
   bool       zippered()       const; // 'zip' keyword used and >1 index var
   AList&     inductionVariables();   // DefExprs, one per iterated expr
-  AList&     iteratedExpressions();  // SymExprs, one per iterated expr
+  AList&     iteratedExpressions();  // Exprs, one per iterated expr
   AList&     shadowVariables();      // DefExprs of ShadowVarSymbols
   BlockStmt* loopBody()       const; // the body of the forall loop
   LabelSymbol* continueLabel();      // create it if not already
 
   // when originating from a ForLoop
   bool       createdFromForLoop()    const;  // is converted from a for-loop
-  bool       iterCallAlreadyTagged() const;  // already has 'tag' actual
   bool       needToHandleOuterVars() const;  // yes, convert to shadow vars
 
   DECLARE_COPY(ForallStmt);
@@ -69,6 +68,8 @@ public:
   int   reduceIntentIdx(Symbol* var);
   void  setNotZippered();
 
+  bool hasVectorizationHazard() const;
+  void setHasVectorizationHazard(bool v);
 private:
   bool           fZippered;
   AList          fIterVars;
@@ -76,13 +77,13 @@ private:
   AList          fShadowVars;  // may be empty
   BlockStmt*     fLoopBody;    // always present
   bool           fFromForLoop; // see comment below
+  bool           fVectorizationHazard;
 
   ForallStmt(bool zippered, BlockStmt* body);
 
 public:
   LabelSymbol*   fContinueLabel;     // update_symbols() needs the labels
   LabelSymbol*   fErrorHandlerLabel;
-  bool           fFromResolvedForLoop;
 
   // for recursive iterators during lowerIterators
   DefExpr*       fRecIterIRdef;
@@ -113,7 +114,6 @@ inline AList& ForallStmt::iteratedExpressions()    { return fIterExprs;  }
 inline AList& ForallStmt::shadowVariables()        { return fShadowVars; }
 inline BlockStmt* ForallStmt::loopBody()     const { return fLoopBody;   }
 
-inline bool ForallStmt::iterCallAlreadyTagged() const { return  fFromForLoop; }
 inline bool ForallStmt::needToHandleOuterVars() const { return !fFromForLoop; }
 inline bool ForallStmt::createdFromForLoop()    const { return  fFromForLoop; }
 
@@ -137,6 +137,7 @@ inline Expr* ForallStmt::firstIteratedExpr() const { return fIterExprs.head;  }
 
 /// helpers ///
 
+bool        isForallIterVarDef(Expr* expr);
 bool        isForallIterExpr(Expr* expr);
 bool        isForallRecIterHelper(Expr* expr);
 bool        isForallLoopBody(Expr* expr);

@@ -10,6 +10,10 @@ ifneq ($(CHPL_MAKE_COMM_SEGMENT),none)
 CHPL_GASNET_CFG_OPTIONS += --enable-segment-$(CHPL_MAKE_COMM_SEGMENT)
 endif
 
+ifneq ($(CHPL_MAKE_COMM_SUBSTRATE),none)
+CHPL_GASNET_CFG_OPTIONS += --enable-$(CHPL_MAKE_COMM_SUBSTRATE)
+endif
+
 # PSHM (inter-Process SHared Memory) provide a mechanism for gasnet instances
 # on the same node to communicate through shared memory instead of the real
 # conduit. In "production" we only run a single gasnet client per node so this
@@ -27,10 +31,6 @@ ifneq ($(CHPL_MAKE_COMM_SEGMENT),everything)
 CHPL_GASNET_CFG_OPTIONS += --disable-aligned-segments
 endif
 
-ifeq ($(CHPL_MAKE_TARGET_PLATFORM),pwr5)
-CHPL_GASNET_CFG_OPTIONS += -with-mpi-cc=mpcc
-endif
-
 ifeq ($(CHPL_MAKE_TARGET_PLATFORM),pwr6)
 CHPL_GASNET_CFG_OPTIONS += -with-mpi-cc=mpcc
 endif
@@ -41,7 +41,6 @@ ifeq ($(CHPL_MAKE_COMM_SUBSTRATE),gemini)
 CHPL_GASNET_CFG_OPTIONS += --enable-gemini-multi-domain
 else
 ifeq ($(CHPL_MAKE_COMM_SUBSTRATE),aries)
-CHPL_GASNET_CFG_OPTIONS += --enable-aries
 CHPL_GASNET_CFG_OPTIONS += --enable-aries-multi-domain
 else
 # We need to do this because the auto-detect stuff for gemini is not
@@ -76,7 +75,17 @@ XTRA_POST_BUILD_COMMAND=cd $(GASNET_BUILD_DIR)/other/amudp && $(MAKE) amudprun-h
 endif
 
 
-CHPL_GASNET_ENV_VARS:= CC='$(CC)' CXX='$(CXX)'
+ifeq (, $(MPI_CC))
+MPI_CC=mpicc
+endif
+
+ifeq ($(CHPL_LIB_PIC),pic)
+GASNET_CFLAGS += $(SHARED_LIB_CFLAGS)
+# MPI_CFLAGS overides autodetection, which we don't want so add to MPI_CC
+MPI_CC += $(SHARED_LIB_CFLAGS)
+endif
+
+CHPL_GASNET_ENV_VARS:= CC='$(CC)' CXX='$(CXX)' MPI_CC='$(MPI_CC)' CFLAGS='$(GASNET_CFLAGS)' CXXFLAGS='$(GASNET_CFLAGS)'
 
 CHPL_GASNET_CFG_OPTIONS += $(CHPL_GASNET_MORE_CFG_OPTIONS)
 

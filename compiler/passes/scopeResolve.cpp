@@ -36,6 +36,7 @@
 #include "stlUtil.h"
 #include "stringutil.h"
 #include "TryStmt.h"
+#include "UnmanagedClassType.h"
 #include "visibleFunctions.h"
 #include "wellknown.h"
 
@@ -105,6 +106,8 @@ static bool          lookupThisScopeAndUses(const char*           name,
 
 static ModuleSymbol* definesModuleSymbol(Expr* expr);
 
+static void          resolveUnmanagedBorrows();
+
 void scopeResolve() {
   //
   // add all program asts to the symbol table
@@ -120,20 +123,6 @@ void scopeResolve() {
   //
   forv_Vec(AggregateType, ct, gAggregateTypes) {
     ct->addClassToHierarchy();
-  }
-
-  //
-  // add implicit fields for implementing alias-named-argument passing
-  //
-  forv_Vec(AggregateType, at, gAggregateTypes) {
-    for_fields(field, at) {
-      if (strcmp(field->name, "outer") == 0) {
-        USR_FATAL_CONT(field,
-                       "Cannot have a field named 'outer'. "
-                       "'outer' is used to refer to an outer class "
-                       "from within a nested class.");
-      }
-    }
   }
 
   //
@@ -173,23 +162,6 @@ void scopeResolve() {
     adjustMethodThisForDefaultUnmanaged(fn);
   }
 
-  //
-  // build constructors (type and value versions)
-  // (initializers are built during normalize)
-  //
-  bool warnExternClass = true;
-  forv_Vec(AggregateType, ct, gAggregateTypes) {
-    if (isClass(ct) && ct->symbol->hasFlag(FLAG_EXTERN) && warnExternClass) {
-      warnExternClass = false;
-      USR_WARN(ct, "Extern classes have been deprecated");
-    }
-
-    ct->createOuterWhenRelevant();
-    if (ct->needsConstructor()) {
-      ct->buildConstructors();
-    }
-  }
-
   resolveGotoLabels();
 
   resolveUnresolvedSymExprs();
@@ -204,17 +176,25 @@ void scopeResolve() {
     do {
       changed = false;
       forv_Vec(AggregateType, at, gAggregateTypes) {
-        // Ignore aggregate types with old-style constructors
-        // since the old constructor code removes the
-        // init expr and the type expr.
-        if (!at->needsConstructor() &&
-            // And don't try to mark generic again
-            !at->isGeneric()) {
+        // don't try to mark generic again
+        if (!at->isGeneric()) {
+
+          bool anyGeneric = false;
+          bool anyNonDefaultedGeneric = false;
           for_fields(field, at) {
-            if (at->fieldIsGeneric(field)) {
-              at->markAsGeneric();
-              changed = true;
+            bool hasDefault = false;
+            if (at->fieldIsGeneric(field, hasDefault)) {
+              anyGeneric = true;
+              if (hasDefault == false)
+                anyNonDefaultedGeneric = true;
             }
+          }
+
+          if (anyGeneric) {
+            at->markAsGeneric();
+            if (anyNonDefaultedGeneric == false)
+              at->markAsGenericWithDefaults();
+            changed = true;
           }
         }
       }
@@ -223,13 +203,10 @@ void scopeResolve() {
 
   forv_Vec(AggregateType, ct, gAggregateTypes) {
     // Build the type constructor now that we know which fields are generic
-    // We do it here only for types with initializers
-    if (!ct->needsConstructor()) {
-      if (isClass(ct) && ct->symbol->hasFlag(FLAG_EXTERN)) {
-        USR_FATAL_CONT(ct, "Extern classes are not supported by initializers");
-      }
-      ct->buildConstructors();
+    if (isClass(ct) && ct->symbol->hasFlag(FLAG_EXTERN)) {
+      USR_FATAL_CONT(ct, "Extern classes are not supported.");
     }
+    ct->buildTypeConstructor();
   }
 
   ResolveScope::destroyAstMap();
@@ -241,6 +218,8 @@ void scopeResolve() {
   renameDefaultTypesToReflectWidths();
 
   cleanupExternC();
+
+  resolveUnmanagedBorrows();
 }
 
 /************************************* | **************************************
@@ -364,11 +343,14 @@ static void scopeResolve(ForallStmt*         forall,
       stmtScope->extend(sym);
   }
 
+  for_alist(itexpr, forall->iteratedExpressions()) {
+    scopeResolveExpr(itexpr, stmtScope);
+  }
+
   for_shadow_vars_and_defs(svar, sdef, temp, forall) {
     stmtScope->extend(svar);
-    INT_ASSERT(!isBlockStmt(sdef->init));
-    // If the above assert does not hold, need to do something like
-    //   scopeResolve(toBlockStmt(sdef->init, stmtScope)
+    if (sdef->init != NULL)
+      scopeResolveExpr(sdef->init, stmtScope);
   }
 
   scopeResolve(loopBody->body, bodyScope);
@@ -471,7 +453,7 @@ static void scopeResolve(LoopExpr* fe, ResolveScope* parent) {
   if (fe->indices) scopeResolveExpr(fe->indices, scope);
   if (fe->cond) scopeResolveExpr(fe->cond, scope);
 
-  scopeResolveExpr(fe->expr, scope);
+  scopeResolveExpr(fe->loopBody, scope);
 }
 
 static void scopeResolve(CallExpr* call, ResolveScope* scope) {
@@ -487,6 +469,10 @@ static void scopeResolveExpr(Expr* expr, ResolveScope* scope) {
     scopeResolve(ife, scope);
   } else if (LoopExpr* fe = toLoopExpr(expr)) {
     scopeResolve(fe, scope);
+  } else if (BlockStmt* block = toBlockStmt(expr)) {
+    scopeResolve(block, scope);
+  } else if (NamedExpr* named = toNamedExpr(expr)) {
+    scopeResolveExpr(named->actual, scope);
   }
 }
 
@@ -523,7 +509,6 @@ static void scopeResolve(const AList& alist, ResolveScope* scope) {
         }
       }
 
-      // Look for IfExprs
       if (def->init != NULL) {
         scopeResolveExpr(def->init, scope);
       }
@@ -851,27 +836,62 @@ static Expr* handleUnstableClassType(SymExpr* se) {
     if (TypeSymbol* ts = toTypeSymbol(se->symbol())) {
       if (isClass(ts->type)) {
         bool ok = false;
-        CallExpr* inCall = toCallExpr(se->parentExpr);
-        DefExpr* inDef = toDefExpr(se->parentExpr);
+        CallExpr* pCall = toCallExpr(se->parentExpr);
+        DefExpr* inDef = NULL;
+        CatchStmt* inCatch = NULL;
+        CallExpr* inCall = NULL;
+
+        // Find outer def/catch
+        for (Expr* cur = se; cur != NULL; cur = cur->parentExpr ) {
+          if (CatchStmt* c = toCatchStmt(cur))
+            inCatch = c;
+          if (DefExpr* d = toDefExpr(cur))
+            inDef = d;
+        }
+        // Find outer call, but don't count:
+        //  * baseExpr
+        //  * type construction (calls to types, buildArrayRuntimeType)
+        for (Expr* cur = se; cur != NULL; cur = cur->parentExpr ) {
+          if (CallExpr* c = toCallExpr(cur))
+            inCall = c;
+          if (CallExpr* p = toCallExpr(cur->parentExpr)) {
+            if (p->baseExpr == cur) {
+              // don't count base expr so we can warn on
+              // var x:MyGenericClass(int).
+              break;
+            } else if (SymExpr* se = toSymExpr(p->baseExpr)) {
+              if (isTypeSymbol(se->symbol()))
+                // Don't count calls to types (type construction)
+                break;
+            } else if (p->isNamed("chpl__buildArrayRuntimeType")) {
+              // Don't count array type construction
+              break;
+            }
+          }
+        }
+
         FnSymbol* inFn = se->getFunction();
-        if (inCall) {
-          if (callSpecifiesClassKind(inCall)) {
+        if (pCall) {
+          if (callSpecifiesClassKind(pCall)) {
             // It's OK, it's decorated
             ok = true;
           }
-          CallExpr* outerCall = toCallExpr(inCall->parentExpr);
+          CallExpr* outerCall = toCallExpr(pCall->parentExpr);
           CallExpr* outerOuterCall = NULL;
           if (outerCall) outerOuterCall = toCallExpr(outerCall->parentExpr);
 
-          if (hasChplManagerArgument(inCall) ||
+          if (hasChplManagerArgument(pCall) ||
               hasChplManagerArgument(outerCall)) {
             ok = true;
           } else if (outerOuterCall && outerCall &&
               callSpecifiesClassKind(outerOuterCall) &&
               outerCall == outerOuterCall->get(1) &&
               outerCall->isPrimitive(PRIM_NEW) &&
-              inCall == outerCall->get(1)) {
+              pCall == outerCall->get(1)) {
             // 'new Owned(SomeClass(int))'
+            ok = true;
+          } else if (outerCall && callMakesDmap(outerCall)) {
+            // var something: dmap( Block( ) )
             ok = true;
           } else if (outerOuterCall && callMakesDmap(outerOuterCall)) {
             // new dmap( new Block( ) )
@@ -881,38 +901,37 @@ static Expr* handleUnstableClassType(SymExpr* se) {
             // throw new Error()
             ok = true;
           } else if (outerCall && outerCall->isPrimitive(PRIM_NEW) &&
-                     inCall == outerCall->get(1)) {
+                     pCall == outerCall->get(1)) {
             // 'new SomeClass()'
             // let ok be set as it was above unless changing default
             if (fDefaultUnmanaged) ok = false;
           } else if (outerCall && callSpecifiesClassKind(outerCall) &&
-                     inCall->baseExpr == se) {
+                     pCall->baseExpr == se) {
             // ':borrowed MyGenericClass(int)'
             ok = true;
-          } else if (inCall->baseExpr == se) {
+          } else if (pCall->baseExpr == se) {
             // ':MyGenericClass(int)'
             // let ok be set as it was above unless changing default
             if (fDefaultUnmanaged) ok = false;
           }
-          if (inCall->isNamed(".") &&
-              inCall->get(1) == se) {
+          if (pCall->isNamed(".") &&
+              pCall->get(1) == se) {
             // Another pattern for the above case
             ok = true;
           }
         }
 
-        // Types in catch block specifications are OK
-        {
-          Expr* cur = se;
-          while (cur) {
-            if (CatchStmt* c = toCatchStmt(cur)) {
-              if (c->expr() == inDef) {
-                ok = true;
-                break;
-              }
-            }
-            cur = cur->parentExpr;
-          }
+        if (inDef && inDef->sym->hasFlag(FLAG_TYPE_VARIABLE)) {
+          // Types in type aliases are OK
+          ok = true;
+        } else if (inCatch) {
+          // Types in catch block specifications are OK
+          ok = true;
+        } else if (inCall && !inCall->isPrimitive(PRIM_NEW)) {
+          // typefunction(SomeClass)
+          // typefunction(SomeGenericClass(int))
+          if (!fDefaultUnmanaged)
+            ok = true;
         }
 
         // Types in extern function procs are assumed to
@@ -985,6 +1004,14 @@ static void resolveUnresolvedSymExpr(UnresolvedSymExpr* usymExpr) {
     FnSymbol* fn = toFnSymbol(sym);
 
     if (fn == NULL) {
+      // This deprecation should be removed in 1.19
+      if (sym->hasFlag(FLAG_TYPE_VARIABLE)) {
+        if (0 == strcmp(name, "Owned"))
+          USR_WARN(usymExpr, "Owned is deprecated, use owned instead");
+        if (0 == strcmp(name, "Shared"))
+          USR_WARN(usymExpr, "Shared is deprecated, use shared instead");
+      }
+
       SymExpr* symExpr = new SymExpr(sym);
 
       usymExpr->replace(symExpr);
@@ -1130,13 +1157,7 @@ static void insertFieldAccess(FnSymbol*          method,
   checkIdInsideWithClause(expr, usymExpr);
 
   if (nestDepth > 0) {
-    if (toAggregateType(method->_this->getValType())->hasInitializers()) {
-      USR_FATAL_CONT("Illegal use of identifier '%s' from enclosing type", name);
-    } else {
-      for (int i = 0; i < nestDepth; i++) {
-        dot = new CallExpr(".", dot, new_CStringSymbol("outer"));
-      }
-    }
+    USR_FATAL_CONT("Illegal use of identifier '%s' from enclosing type", name);
   }
 
   if (isTypeSymbol(sym) == true) {
@@ -1313,9 +1334,10 @@ static bool hasOuterVariable(ShadowVarSymbol* svar) {
 
     case TFI_TASK_PRIVATE:  return false;
 
-    case TFI_IN_OUTERVAR:
-    case TFI_REDUCE_OP:     INT_ASSERT(false); // should not happen
-                            return false;      // dummy
+    case TFI_IN_PARENT:         // these have not been created yet
+    case TFI_REDUCE_OP:
+    case TFI_REDUCE_PARENT_AS:
+    case TFI_REDUCE_PARENT_OP:  INT_ASSERT(false); return false;
   }
   INT_FATAL(svar, "garbage intent");
   return false;  //dummy
@@ -1374,7 +1396,7 @@ static void checkRefsToIdxVars(ForallStmt* fs, DefExpr* def,
 static void setupShadowVars() {
   forv_Vec(ForallStmt, fs, gForallStmts)
     for_shadow_vars_and_defs(svar, def, temp, fs) {
-       if (hasOuterVariable(svar))
+      if (hasOuterVariable(svar))
         setupOuterVar(fs, svar);
       if (svar->isTaskPrivate())
         checkRefsToIdxVars(fs, def, svar);
@@ -1540,7 +1562,7 @@ static bool tryCResolve(ModuleSymbol*                     module,
               SET_LINENO(ct->symbol);
               // If this is a class DefExpr,
               //  make sure its initializer gets created.
-              ct->buildConstructors();
+              ct->buildTypeConstructor();
             }
           }
         }
@@ -1688,14 +1710,12 @@ Symbol* lookup(const char* name, BaseAST* context) {
     //   otherwise fail
 
     for_vector(Symbol, sym, symbols) {
-      if (isFnSymbol(sym) == false) {
+      if (! isFnSymbol(sym)) {
         USR_FATAL_CONT(sym, "symbol %s is multiply defined", name);
         printConflictingSymbols(symbols, sym);
         break;
       }
     }
-
-    USR_STOP();
 
     retval = NULL;
   }
@@ -1844,7 +1864,7 @@ static bool lookupThisScopeAndUses(const char*           name,
 
         forv_Vec(UseStmt, use, *moduleUses) {
           if (use != NULL) {
-            if (use->skipSymbolSearch(name) == false) {
+            if (use->skipSymbolSearch(name, false) == false) {
               const char* nameToUse = use->isARename(name) ? use->getRename(name) : name;
               BaseAST* scopeToUse = use->getSearchScope();
 
@@ -2248,4 +2268,57 @@ static ModuleSymbol* definesModuleSymbol(Expr* expr) {
   }
 
   return retval;
+}
+
+/************************************* | **************************************
+*                                                                             *
+*                                                                             *
+*                                                                             *
+************************************** | *************************************/
+
+
+
+// Find 'unmanaged SomeClass' and 'borrowed SomeClass' and replace these
+// with the compiler's simpler representation (canonical type or unmanaged type)
+static void resolveUnmanagedBorrows() {
+
+  forv_Vec(CallExpr, call, gCallExprs) {
+    if (call->isPrimitive(PRIM_TO_UNMANAGED_CLASS) ||
+        call->isPrimitive(PRIM_TO_BORROWED_CLASS)) {
+      SET_LINENO(call);
+
+      bool unmanaged = call->isPrimitive(PRIM_TO_UNMANAGED_CLASS);
+      if (SymExpr* se = toSymExpr(call->get(1))) {
+        if (TypeSymbol* ts = toTypeSymbol(se->symbol())) {
+          TypeSymbol* useTS = ts;
+
+          AggregateType* at = toAggregateType(ts->type);
+          if (at && isClass(at)) {
+            if (unmanaged) {
+              UnmanagedClassType* unm = at->getUnmanagedClass();
+              useTS = unm->symbol;
+            }
+          } else {
+            const char* type = NULL;
+            if (call->isPrimitive(PRIM_TO_UNMANAGED_CLASS))
+              type = "unmanaged";
+            else if (call->isPrimitive(PRIM_TO_BORROWED_CLASS))
+              type = "borrowed";
+
+            USR_FATAL_CONT(call, "%s can only apply to class types "
+                                 "(%s is not a class type)",
+                                 type, ts->name);
+          }
+
+          // replace the call with a new symexpr pointing to ts
+          call->replace(new SymExpr(useTS));
+        }
+      }
+      // It's tempting to give type constructor calls the same
+      // treatment, but type constructors are so special;
+      // see normalizeCallToTypeConstructor which changes
+      // them to _type_construct_C e.g. and such a function won't
+      // exist for the unmanaged type.
+    }
+  }
 }

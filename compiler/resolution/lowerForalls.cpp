@@ -19,6 +19,8 @@
 
 #include "astutil.h"
 #include "AstVisitorTraverse.h"
+#include "CForLoop.h"
+#include "ForLoop.h"
 #include "ForallStmt.h"
 #include "implementForallIntents.h"
 #include "passes.h"
@@ -32,7 +34,6 @@ This file provides parts of the implementation of forall loops
 and forall intents, specifically:
 
 * Setting up shadow variables and other things - during resolution.
-This part 
 
 * Lowering forall loops by inlining the corresponding parallel
 iterators - during lowerIterators.
@@ -102,12 +103,12 @@ includes setting up svar2clonevar - the SymbolMap
 
 (end) code added after the end of the inlined iterator body
 
-TFI_IN_OUTERVAR
+TFI_IN_PARENT
   nothing - it supports IN intents
 
 TFI_IN, TFI_CONST_IN
   def currentVar
-  currentVar.init(outerVarSym() of the corresponding TFI_IN_OUTERVAR)
+  currentVar.init(outerVarSym() of the corresponding TFI_IN_PARENT)
   svar2clonevar: SV --> currentVar
 
 (end)
@@ -120,6 +121,10 @@ TFI_REF, TFI_CONST_REF
 TFI_REDUCE_OP
   // use the reduce op already set up for us
   svar2clonevar: SV --> SV->outerVarSym()
+
+TFI_REDUCE_PARENT_AS
+TFI_REDUCE_PARENT_OP
+  // t.b.d.
 
 TFI_REDUCE
   def currentVar
@@ -149,7 +154,7 @@ and a formal is added to the task function
 
 (end) deinit actions at the end of the task function
 
-TFI_IN_OUTERVAR
+TFI_IN_PARENT
   nothing - it supports IN intents
 
 TFI_IN, TFI_CONST_IN
@@ -172,6 +177,10 @@ TFI_REF, TFI_CONST_REF
 
 TFI_REDUCE_OP
 (actual) svar2clonevar(SV)
+
+TFI_REDUCE_PARENT_AS
+TFI_REDUCE_PARENT_OP
+  // t.b.d.
 
 (in task fn)
   def currentVar
@@ -223,7 +232,7 @@ Use the current svar2clonevar map when cloning.
 In more detail - for an IN intent at *** start of the iterator body *** :
 
 ForallStmt::shadowVariables() has DefExprs of two ShadowVarSymbols:
- TFI_IN_OUTERVAR comes first,
+ TFI_IN_PARENT comes first,
  TFI_IN or TFI_CONST_IN comes immediately after.
 
 Call them SVO and SVI, respectively.
@@ -245,8 +254,8 @@ Here are the steps performed by expandTopLevel() / expandShadowVarTopLevel():
 
 For a reduce intent, almost the same steps are performed.
 The generated code is somewhat different because:
-* The ShadowVarSymbols in ForallStmt::shadowVariables() are
-TFI_REDUCE_OP then TFI_REDUCE.
+* The ShadowVarSymbols in ForallStmt::shadowVariables() are, in order:
+TFI_REDUCE_PARENT_OP, TFI_REDUCE_PARENT_AS, TFI_REDUCE_OP, TFI_REDUCE.
 * initBlock() and deinitBlock() contain the sequences needed
 to set up/tear down the reduceOp class and the accumulation state.
 
@@ -305,194 +314,6 @@ from such a shadow variable - because it is a "ref".
 
 */
 
-
-///////////                                       ///////////
-/////////// Set up shadow variables at resolve(). ///////////
-///////////                                       ///////////
-
-
-/////////// create helper SVars ///////////
-
-static ShadowVarSymbol* create_IN_OUTERVAR(ForallStmt* fs, ShadowVarSymbol* SI)
-{
-  ShadowVarSymbol* SO = new ShadowVarSymbol(TFI_IN_OUTERVAR,
-                                            astr("SO_", SI->name), NULL);
-  SO->addFlag(FLAG_CONST);  // make it be like 'const in'
-  SO->qual = QUAL_CONST_VAL;
-  SO->type = SI->type;
-
-  // It goes on the shadow variable list right before SI.
-  SI->defPoint->insertBefore(new DefExpr(SO));
-  INT_ASSERT(SI->OutervarForIN() == SO);  // ensure OutervarForIN() works
-
-  return SO;
-}
-
-static ShadowVarSymbol* create_REDUCE_OP(ForallStmt* fs, ShadowVarSymbol* AS)
-{
-  SymExpr* gOpSE = toSymExpr(AS->reduceOpExpr()->remove());
-  Symbol*  gOp   = gOpSE->symbol();
-  // Handling of the case of gOp being a type should have happened earlier.
-  INT_ASSERT(!gOp->hasFlag(FLAG_TYPE_VARIABLE));
-
-  ShadowVarSymbol* RP = new ShadowVarSymbol(TFI_REDUCE_OP,
-                                            astr("RP_", AS->name), gOpSE);
-
-  // It always points to the same reduction op class instance.
-  RP->addFlag(FLAG_CONST);
-  RP->qual = QUAL_CONST_VAL;
-  RP->type = gOp->type;
-
-  // It goes on the shadow variable list right before AS.
-  AS->defPoint->insertBefore(new DefExpr(RP));
-  INT_ASSERT(AS->ReduceOpForAccumState() == RP);  // ensure ReduceOpForAccumState() works
-
-  return RP;
-}
-
-/////////// set up one SVar ///////////
-
-static void insertInitialization(BlockStmt* destBlock,
-                                 Symbol* destVar, Symbol* srcVar) {
-  destBlock->insertAtTail("'init var'(%S,%S)", destVar, srcVar);
-}
-static void insertInitialization(BlockStmt* destBlock,
-                                 Symbol* destVar, Expr* srcExpr) {
-  VarSymbol* initTemp = new VarSymbol("initTemp");
-  destBlock->insertAtTail(new DefExpr(initTemp));
-  destBlock->insertAtTail(new CallExpr(PRIM_MOVE, initTemp, srcExpr));
-  insertInitialization(destBlock, destVar, initTemp);
-}
-static void insertDeinitialization(BlockStmt* destBlock,
-                                   Symbol* destVar) {
-  // NB if we use PRIM_CALL_DESTRUCTOR, we end up with
-  // deinit() calls for shadow variables of class types.
-  destBlock->insertAtTail("chpl__autoDestroy(%S)", destVar);
-}
-
-static void setupForIN(ForallStmt* fs, ShadowVarSymbol* SI, Symbol* dum,
-                       BlockStmt* IB, BlockStmt* DB) {
-  INT_ASSERT(!SI->isRef());
-
-  ShadowVarSymbol* SO = create_IN_OUTERVAR(fs, SI);
-
-  insertInitialization(IB, SI, SO);
-  insertDeinitialization(DB, SI);
-}
-
-static void setupForREF(ForallStmt* fs, ShadowVarSymbol* SR, Symbol* gR,
-                        BlockStmt* IB, BlockStmt* DB) {
-}  // nothing for a REF intent
-
-// Set up the SVar for the ReduceOp class.
-static void setupForReduce_OP(ForallStmt* fs, ShadowVarSymbol* RP, Symbol* gOp,
-                              BlockStmt* IB, BlockStmt* DB) {
-  IB->insertAtTail("'move'(%S, clone(%S,%S))", // initialization
-                   RP, gMethodToken, gOp);
-
-  DB->insertAtTail("chpl__reduceCombine(%S,%S)", gOp, RP);
-  DB->insertAtTail("chpl__cleanupLocalOp(%S,%S)", gOp, RP); // deletes RP
-}
-
-// Set up the SVar for the Accumulation State.
-static void setupForReduce_AS(ForallStmt* fs, ShadowVarSymbol* AS, Symbol* dum,
-                              BlockStmt* IB, BlockStmt* DB) {
-  ShadowVarSymbol* RP = AS->ReduceOpForAccumState();
-  insertInitialization(IB, AS, new_Expr("identity(%S,%S)", gMethodToken, RP));
-
-  DB->insertAtTail("accumulate(%S,%S,%S)", gMethodToken, RP, AS);
-  insertDeinitialization(DB, AS);
-}
-
-static void setupForReduce(ForallStmt* fs, ShadowVarSymbol* AS, Symbol* AS_ovar,
-                           BlockStmt* IB, BlockStmt* DB) {
-  ShadowVarSymbol* RP = create_REDUCE_OP(fs, AS);
-  setupForReduce_OP(fs, RP, RP->outerVarSym(),
-                    RP->initBlock(), RP->deinitBlock());
-  setupForReduce_AS(fs, AS, AS_ovar, IB, DB);
-}
-
-static void setupForTaskPrivate(ForallStmt* fs, ShadowVarSymbol* TPV,
-                                BlockStmt* IB, BlockStmt* DB) {
-  // IB already comes from TPV's declaration in the with-clause.
-  // Need deinitialization for 'var'/'const' only. No deinit for refs.
-  if (!TPV->isRef())
-    insertDeinitialization(DB, TPV);
-}
-
-/////////// driver function ///////////
-
-//
-// Set up shadow variables during resolution:
-// * Create helper shadow variables: TFI_REDUCE_OP, TFI_IN_OUTERVAR.
-// * Populate task startup/teardown blocks.
-//
-// Note that this is done during resolveForallHeader,
-// i.e. before resolving the forall loop body.
-//
-void setupShadowVariables(ForallStmt* fs)
-{
-  for_shadow_vars(svar, temp, fs)
-  {
-    SET_LINENO(svar);
-    Symbol* ovar = svar->outerVarSym();
-    BlockStmt* IB = svar->initBlock();
-    BlockStmt* DB = svar->deinitBlock();
-    
-    switch (svar->intent)
-    {
-      case TFI_IN:
-      case TFI_CONST_IN:     setupForIN(fs, svar, ovar, IB, DB);      break;
-
-      case TFI_REF:
-      case TFI_CONST_REF:    setupForREF(fs, svar, ovar, IB, DB);     break;
-
-      case TFI_REDUCE:       setupForReduce(fs, svar, ovar, IB, DB);  break;
-
-      case TFI_TASK_PRIVATE: setupForTaskPrivate(fs, svar, IB, DB);   break;
-
-      // We place such svars earlier in the list.
-      // They should not come up here.
-      case TFI_IN_OUTERVAR:
-      case TFI_REDUCE_OP:    INT_ASSERT(false);  break;
-
-      // No abstract intents, please.
-      case TFI_DEFAULT:
-      case TFI_CONST:        INT_ASSERT(false);  break;
-    }
-  }
-}
-
-
-/////////// Resolve shadow variables at resolve(). ///////////
-
-//
-// Resolve svars' IB, DB after we have set them up above.
-//
-static void resolveShadowVarsForForallStmt(ForallStmt* fs)
-{
-  for_shadow_vars(svar, temp, fs) {
-    resolveBlockStmt(svar->initBlock());
-    resolveBlockStmt(svar->deinitBlock());
-  }
-}
-
-//
-// Resolve shadow variables of a ForallStmt.
-//
-// Do this only if 'def' is the ForallStmt's last shadow variable def.
-// This complication is due to the resolution order guided by getNextExpr().
-//
-void resolveShadowVarsIfNeeded(DefExpr* def)
-{
-  if (AList* list = def->list)
-    if (ForallStmt* fs = toForallStmt(list->parent))
-      if (list == &fs->shadowVariables())
-        if (def == list->tail)
-          resolveShadowVarsForForallStmt(fs);
-}
-
-
 ///////////                                                      ///////////
 /////////// Lower ForallStmts by inlining the parallel iterator. ///////////
 ///////////                                                      ///////////
@@ -532,9 +353,27 @@ public:
   }
 
   virtual bool enterForallStmt(ForallStmt* node) {
+
+    if (forall->hasVectorizationHazard()) {
+      node->setHasVectorizationHazard(true);
+    }
+
     expandForall(this, node);
     // expandForall() takes care of descending into 'node'
     return false;
+  }
+
+  virtual bool enterCForLoop(CForLoop* node) {
+    if (forall->hasVectorizationHazard()) {
+      node->setHasVectorizationHazard(true);
+    }
+    return true;
+  }
+  virtual bool enterForLoop(ForLoop* node) {
+    if (forall->hasVectorizationHazard()) {
+      node->setHasVectorizationHazard(true);
+    }
+    return true;
   }
 };
 
@@ -562,7 +401,7 @@ static Symbol* removeParIterReturn(BlockStmt* cloneBody, bool moreRefs) {
   INT_ASSERT(retexpr && retexpr->isPrimitive(PRIM_RETURN));
   Symbol* retsym = toSymExpr(retexpr->get(1))->symbol();
   INT_ASSERT(retsym->type->symbol->hasFlag(FLAG_ITERATOR_RECORD));
-  
+
   retexpr->remove();
   if (!moreRefs) retsym->defPoint->remove();
   // There should not be any references left to 'ret', unless moreRefs.
@@ -595,8 +434,8 @@ static VarSymbol* createCurrIN(ShadowVarSymbol* SI) {
 }
 
 // ... for the ReduceOp class of a reduce intent
-static VarSymbol* createCurrROp(ShadowVarSymbol* RP) {
-  VarSymbol* currRP = new VarSymbol(astr("RP_", RP->name), RP->type);
+static VarSymbol* createCurrRP(ShadowVarSymbol* RP) {
+  VarSymbol* currRP = new VarSymbol(RP->name, RP->type);
   currRP->qual = QUAL_CONST_VAL;
   return currRP;
 }
@@ -620,6 +459,10 @@ static VarSymbol* createCurrTPV(ShadowVarSymbol* TPV) {
 static void addDefAndMap(Expr* aInit, SymbolMap& map, ShadowVarSymbol* svar,
                          VarSymbol* currVar)
 {
+  if (currVar->type == dtVoid) {
+    INT_ASSERT(currVar->firstSymExpr() == NULL);
+    return;
+  }
   aInit->insertBefore(new DefExpr(currVar));
   map.put(svar, currVar);
 }
@@ -702,7 +545,7 @@ static void addFormalTempSIifNeeded(FnSymbol* cloneTaskFn, Expr* aInit,
 
   // map(SI) = currSI; map(SO) = eFormal
   e->value = currSI;
-  map.put(SI->OutervarForIN(), eFormal);
+  map.put(SI->ParentvarForIN(), eFormal);
 
   eFormal->intent         = INTENT_CONST_REF;
   eFormal->originalIntent = INTENT_CONST_REF;  // (*)
@@ -716,6 +559,64 @@ static void addFormalTempSIifNeeded(FnSymbol* cloneTaskFn, Expr* aInit,
   //   parallel/forall/in-intents/both-arr-dom-var-const
 
   addCloneOfInitBlock(aInit, map, SI);
+}
+
+static IntentTag argIntentForForallIntent(ForallIntentTag tfi) {
+  switch (tfi) {
+    case TFI_DEFAULT:      return INTENT_BLANK;
+    case TFI_CONST:        return INTENT_CONST;
+    case TFI_IN:           return INTENT_IN;
+    case TFI_CONST_IN:     return INTENT_CONST_IN;
+    case TFI_REF:          return INTENT_REF;
+    case TFI_CONST_REF:    return INTENT_CONST_REF;
+    case TFI_REDUCE_OP:    return INTENT_CONST_IN;
+
+    case TFI_IN_PARENT:
+    case TFI_REDUCE:
+    case TFI_REDUCE_PARENT_AS:
+    case TFI_REDUCE_PARENT_OP:
+    case TFI_TASK_PRIVATE:
+      // argIntentForForallIntent() is not intended for these
+      INT_ASSERT(false); return INTENT_BLANK;
+  }
+  INT_ASSERT(false); return INTENT_BLANK;
+}
+
+static ArgSymbol* newExtraFormal(ShadowVarSymbol* svar, int ix,
+                                 Symbol* eActual, bool nested)
+{
+    Type*     efType = eActual->type;
+    IntentTag  efInt = argIntentForForallIntent(svar->intent);
+    bool  addFlagImm = false;
+
+    if (efInt & INTENT_FLAG_REF) {
+      INT_ASSERT(efType != dtUnknown && efType != dtAny);
+
+      //
+      // For ref intents, we need to make it a ref type.
+      // Because eFormal will be passed to _build_tuple_always_allow_ref()
+      // call that's created in extendYieldNew().
+      // If _build_tuple_always_allow_ref's actual has a non-ref type,
+      // even if it is an ArgSymbol with a ref intent, the corresponding
+      // component of the resulting tuple will be non-ref, which will break
+      // SSCA2 and test/parallel/forall/vass/intents-all-int.chpl.
+      // Todo: fix resolution of _build_tuple_always_allow_ref.
+      // Or, create a _build_tuple specifically when it is known
+      // which formals/components should be by ref.
+      //
+      efType = efType->getRefType();
+
+      if (eActual->isConstValWillNotChange())
+        addFlagImm = true;
+    }
+
+    ArgSymbol* eFormal = new ArgSymbol(efInt, svar->name, efType);
+
+    if (eFormal->isRef() &&
+        (addFlagImm || eActual->hasFlag(FLAG_REF_TO_IMMUTABLE)))
+      eFormal->addFlag(FLAG_REF_TO_IMMUTABLE);
+
+    return eFormal;
 }
 
 //
@@ -743,7 +644,7 @@ static void addArgAndMap(FnSymbol* cloneTaskFn, CallExpr* callToTFn,
   Symbol* eActual = iMap.get(svar);   // 'e' for "extra" (i.e. newly added)
   callToTFn->insertAtTail(eActualOrRef(callToTFn, svar, eActual));
 
-  ArgSymbol* eFormal = newExtraFormal(svar, ix, eActual, /*nested:*/false);
+  ArgSymbol* eFormal = newExtraFormal(svar, ix, eActual, /*nested:*/true);
   cloneTaskFn->insertFormalAtTail(eFormal);
   map.put(mappee ? mappee : svar, eFormal);
 }
@@ -756,10 +657,7 @@ static void expandShadowVarTaskFn(FnSymbol* cloneTaskFn, CallExpr* callToTFn,
   SET_LINENO(svar);
   switch (svar->intent)
   {
-    case TFI_IN_OUTERVAR: // helper svar - nothing to do
-      break;
-
-    case TFI_IN:          // in intents
+    case TFI_IN:
     case TFI_CONST_IN:
       addArgAndMap(cloneTaskFn, callToTFn, numOrigAct, iMap,
                    map, svar, ix);
@@ -767,34 +665,59 @@ static void expandShadowVarTaskFn(FnSymbol* cloneTaskFn, CallExpr* callToTFn,
       addCloneOfDeinitBlock(aFini, map, svar);
       break;
 
-    case TFI_REF:         // ref intents
+    case TFI_REF:
     case TFI_CONST_REF:
       addArgAndMap(cloneTaskFn, callToTFn, numOrigAct, iMap,
                    map, svar, ix);
       // no init/deinit
       break;
 
-    case TFI_REDUCE_OP:   // reduction op class
+    case TFI_REDUCE:
+    {
+      ShadowVarSymbol *PRP=0, *PAS=0, *RP=0, *AS=svar;
+      setReduceSVars(PRP, PAS, RP, AS);
+
+      /*
+      We have in iMap:
+      - RP+AS svars --> current RP+AS vars in cloneTaskFn's caller.
+
+      We add:
+      - caller's current RP+AS vars as actuals to callToTFn
+      - PRP+PAS formals to cloneTaskFn
+      - curr RP+AS vars to cloneTaskFn
+      - map:
+         PRP+PAS svars --> the PRP+PAS formals
+         RP+AS svars --> the curr RP+AS vars
+
+      [Currently there is no PAS/AS formal/actual. They are upcoming.]
+      */
+
       addArgAndMap(cloneTaskFn, callToTFn, numOrigAct, iMap,
-                   map, svar, ix, svar->outerVarSym());
-      addDefAndMap(aInit, map, svar, createCurrROp(svar));
-      addCloneOfInitBlock(aInit, map, svar);
-      addCloneOfDeinitBlock(aFini, map, svar);
-      break;
+                   map, RP, ix, PRP);
+      map.get(PRP)->name = PRP->name; // tweak the name
+      addDefAndMap(aInit, map, RP, createCurrRP(RP));
+      addDefAndMap(aInit, map, AS, createCurrAS(AS));
 
-    case TFI_REDUCE:      // accumulation state
-      addDefAndMap(aInit, map, svar, createCurrAS(svar));
-      addCloneOfInitBlock(aInit, map, svar);
-      addCloneOfDeinitBlock(aFini, map, svar);
-      break;
+      // Init/deinit code is all with AS.
+      addCloneOfInitBlock(aInit, map, AS);
+      addCloneOfDeinitBlock(aFini, map, AS);
 
-    case TFI_TASK_PRIVATE: // task-private variable
+      break;
+    }
+
+    case TFI_TASK_PRIVATE:
       addDefAndMap(aInit, map, svar, createCurrTPV(svar));
       addCloneOfInitBlock(aInit, map, svar);
       addCloneOfDeinitBlock(aFini, map, svar);
       break;
 
-    case TFI_DEFAULT:    // no abstract intents, please
+    case TFI_IN_PARENT:         // handled upon TFI_IN
+    case TFI_REDUCE_OP:         // handled upon TFI_REDUCE
+    case TFI_REDUCE_PARENT_AS:
+    case TFI_REDUCE_PARENT_OP:
+      break;
+
+    case TFI_DEFAULT:           // no abstract intents, please
     case TFI_CONST:
       INT_ASSERT(false);
       break;
@@ -858,6 +781,53 @@ static void expandTaskFn(ExpandVisitor* EV, CallExpr* callToTFn, FnSymbol* taskF
 
 /////////// expandForall ///////////
 
+static void expandShadowVarForall(ForallStmt* fs,
+                                  SymbolMap& iMap, SymbolMap& map,
+                                  ShadowVarSymbol* srcSV)
+{
+  SET_LINENO(srcSV);
+
+  // copy() also performs map.put(srcSV, newSV)
+  ShadowVarSymbol* newSV = srcSV->copy(&map);
+
+  // Set newSV->outerVarSym.
+  Symbol* newOvar = NULL;
+
+  switch (newSV->intent) {
+    case TFI_IN:
+    case TFI_CONST_IN:
+    case TFI_REF:
+    case TFI_CONST_REF:
+    case TFI_REDUCE:
+      newOvar = srcSV; break;         // the current var just before 'fs'
+
+    case TFI_IN_PARENT:
+      newOvar = srcSV->INforParentvar(); break; // the current var for SI
+
+    case TFI_REDUCE_PARENT_AS:
+      newOvar = srcSV->AccumStateForParentAS(); break;  // current AS var
+
+    case TFI_REDUCE_PARENT_OP:
+      newOvar = srcSV->ReduceOpForParentRP(); break;    // current RP var
+
+    case TFI_REDUCE_OP:
+    case TFI_TASK_PRIVATE:
+      break;                                              // no outer var
+
+    case TFI_DEFAULT:
+    case TFI_CONST:
+      INT_ASSERT(false);                   // no abstract intents, please
+      break;
+  }
+
+  if (newOvar != NULL)
+    newSV->outerVarSE = new SymExpr(iMap.get(newOvar));
+  else
+    INT_ASSERT(newSV->outerVarSE == NULL);
+
+  fs->shadowVariables().insertAtTail(new DefExpr(newSV));
+}
+
 static void expandForall(ExpandVisitor* EV, ForallStmt* fs)
 {
   ForallStmt*     pfs  = EV->forall;
@@ -866,18 +836,7 @@ static void expandForall(ExpandVisitor* EV, ForallStmt* fs)
   ExpandVisitor   forallVis(EV, map);
 
   for_shadow_vars(srcSV, temp, pfs)
-  {
-    SET_LINENO(srcSV);
-
-    // Redirect the original outer vars to their current counterparts.
-    if (Symbol* srcOVar = srcSV->outerVarSym())
-      map.put(srcOVar, iMap.get(srcSV));
-
-    // copy() also performs map.put(srcSV, newSV)
-    ShadowVarSymbol* newSV = srcSV->copy(&map);
-
-    fs->shadowVariables().insertAtTail(new DefExpr(newSV));
-  }
+    expandShadowVarForall(fs, iMap, map, srcSV);
 
   // Traverse recursively.
   fs->loopBody()->accept(&forallVis);
@@ -886,40 +845,43 @@ static void expandForall(ExpandVisitor* EV, ForallStmt* fs)
 
 /////////// outermost visitor ///////////
 
-static void expandShadowVarTopLevel(Expr* aInit, Expr* aFini, SymbolMap& map, ShadowVarSymbol* svar) {
+static void expandShadowVarTopLevel(Expr* aInit, Expr* aFini, SymbolMap& map,
+                                    ShadowVarSymbol* svar)
+{
   SET_LINENO(svar);
   switch (svar->intent)
   {
-    case TFI_IN_OUTERVAR:
-      // The outer var for IB of the corresponding in-intent svar.
-      map.put(svar, svar->INforOutervar()->outerVarSym());
-      break;
-
     case TFI_IN:
     case TFI_CONST_IN:
+    {
+      ShadowVarSymbol* INP = svar->ParentvarForIN();
+      map.put(INP, INP->outerVarSym());
+
       addDefAndMap(aInit, map, svar, createCurrIN(svar));
       addCloneOfInitBlock(aInit, map, svar);
       addCloneOfDeinitBlock(aFini, map, svar);
+
       break;
+    }
 
     case TFI_REF:
     case TFI_CONST_REF:
-      // Let us reference the outer variable directly, for simplicity.
+      // Use the outer variable directly, for simplicity.
       // NB we are not concerned with const checking any more.
-      map.put(svar, svar->outerVarSym());
-      // no code to add
-      break;
-
-    case TFI_REDUCE_OP:
-      // Let us use the global op directly.
       map.put(svar, svar->outerVarSym());
       break;
 
     case TFI_REDUCE:
-      addDefAndMap(aInit, map, svar, createCurrAS(svar));
-      addCloneOfInitBlock(aInit, map, svar);
-      addCloneOfDeinitBlock(aFini, map, svar);
+    {
+      ShadowVarSymbol *PRP=0, *PAS=0, *RP=0, *AS=svar;
+      setReduceSVars(PRP, PAS, RP, AS);
+
+      map.put(RP, PRP->outerVarSym());
+      map.put(AS, PAS->outerVarSym());
+      // We do not need PRP,PAS in 'map' at the top level.
+
       break;
+    }
 
     case TFI_TASK_PRIVATE:
       addDefAndMap(aInit, map, svar, createCurrTPV(svar));
@@ -927,8 +889,13 @@ static void expandShadowVarTopLevel(Expr* aInit, Expr* aFini, SymbolMap& map, Sh
       addCloneOfDeinitBlock(aFini, map, svar);
       break;
 
-    // No abstract intents, please.
-    case TFI_DEFAULT:
+    case TFI_IN_PARENT:         // handled upon TFI_IN
+    case TFI_REDUCE_OP:         // handled upon TFI_REDUCE
+    case TFI_REDUCE_PARENT_AS:
+    case TFI_REDUCE_PARENT_OP:
+      break;
+
+    case TFI_DEFAULT:           // no abstract intents, please
     case TFI_CONST:
       INT_ASSERT(false);
       break;
@@ -963,7 +930,7 @@ static bool shouldGoFirst(ShadowVarSymbol* sv) {
   {
   case TFI_DEFAULT:
   case TFI_CONST:
-  case TFI_IN_OUTERVAR:
+  case TFI_IN_PARENT:
   case TFI_IN:
   case TFI_CONST_IN:
   case TFI_REF:
@@ -972,6 +939,8 @@ static bool shouldGoFirst(ShadowVarSymbol* sv) {
 
   case TFI_REDUCE:
   case TFI_REDUCE_OP:
+  case TFI_REDUCE_PARENT_AS:
+  case TFI_REDUCE_PARENT_OP:
   case TFI_TASK_PRIVATE:
     return false;
   }
@@ -1186,7 +1155,7 @@ static void handleIteratorForwarders(ForallStmt* fs,
                                      CallExpr*& iterCall, FnSymbol*& iterFn)
 {
   // These should have been replaced away in convertIteratorForLoopexpr().
-  INT_ASSERT(strncmp(iterFn->name, astr_loopexpr_iter, strlen(astr_loopexpr_iter)));
+  INT_ASSERT(!isLoopExprFun(iterFn));
 
   // Inline the forwarder, i.e. 'iterFn', like so:
   //

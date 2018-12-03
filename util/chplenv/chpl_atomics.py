@@ -1,10 +1,6 @@
 #!/usr/bin/env python
 import optparse
-import os
 import sys
-
-chplenv_dir = os.path.dirname(__file__)
-sys.path.insert(0, os.path.abspath(chplenv_dir))
 
 import chpl_comm, chpl_compiler, chpl_platform, overrides
 from compiler_utils import CompVersion, get_compiler_version
@@ -16,8 +12,9 @@ def get(flag='target'):
     if flag == 'network':
         atomics_val = overrides.get('CHPL_NETWORK_ATOMICS')
         if not atomics_val:
-            if chpl_comm.get() == 'ugni' and get('target') != 'locks':
-                atomics_val = 'ugni'
+            comm_val = chpl_comm.get()
+            if comm_val in ['ofi', 'ugni'] and get('target') != 'locks':
+                atomics_val = comm_val
             else:
                 atomics_val = 'none'
     elif flag == 'target':
@@ -42,7 +39,7 @@ def get(flag='target'):
                 atomics_val = 'intrinsics'
             elif compiler_val == 'cray-prgenv-cray':
                 atomics_val = 'intrinsics'
-            elif compiler_val == 'cray-prgenv-allinea':
+            elif compiler_val in ['allinea', 'cray-prgenv-allinea']:
                 atomics_val = 'cstdlib'
             elif compiler_val == 'clang':
                 atomics_val = 'intrinsics'

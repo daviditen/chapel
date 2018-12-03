@@ -55,12 +55,13 @@ static llvm::MDNode* generateLoopMetadata(bool addVectorizeEnableMetadata)
                                               llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt1Ty(ctx), true))};
     args.push_back(llvm::MDNode::get(ctx, loopVectorizeEnable));
 
-#ifdef HAVE_LLVM_RV
-    // Region Vectorizer needs loop width to be specified
-    llvm::Metadata *loopVectorWidth[] = { llvm::MDString::get(ctx, "llvm.loop.vectorize.width"),
-                                          llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), 8))};
-    args.push_back(llvm::MDNode::get(ctx, loopVectorWidth));
-#endif
+    /* Region Vectorizer no longer needs loop width
+    if (fRegionVectorizer) {
+      // Region Vectorizer needs loop width to be specified
+      llvm::Metadata *loopVectorWidth[] = { llvm::MDString::get(ctx, "llvm.loop.vectorize.width"),
+                                            llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(llvm::Type::getInt32Ty(ctx), 8))};
+      args.push_back(llvm::MDNode::get(ctx, loopVectorWidth));
+    }*/
 
   }
 
@@ -90,6 +91,8 @@ GenRet CForLoop::codegen()
 
   codegenStmt(this);
 
+  fixVectorizable();
+
   if (outfile)
   {
     BlockStmt*  initBlock = initBlockGet();
@@ -109,7 +112,7 @@ GenRet CForLoop::codegen()
     std::string incr      = codegenCForLoopHeader(incrBlock->copy());
     std::string hdr       = "for (" + init + "; " + test + "; " + incr + ") ";
 
-    codegenOrderIndependence();
+    codegenVectorHint();
 
     info->cStatements.push_back(hdr);
 
@@ -154,6 +157,12 @@ GenRet CForLoop::codegen()
     // all of these cases, we generate a for loop as the same as
     // if(cond) do { body; step; } while(cond).
 
+    // However it is appealing to generate these low-level loops directly
+    // in LLVM IR:
+    //   * could avoid repeated loads
+    //   * could simplify generated IR
+    //   * could avoid problems identifying induction variables
+
     // Create the init basic block
     blockStmtInit = llvm::BasicBlock::Create(info->module->getContext(), FNAME("blk_c_for_init"));
 
@@ -188,11 +197,10 @@ GenRet CForLoop::codegen()
     info->lvt->addLayer();
 
     llvm::MDNode* loopMetadata = nullptr;
-    if(fNoVectorize == false && isOrderIndependent()) {
+    if(fNoVectorize == false && isVectorizable()) {
       bool addVectorizeEnable = false;
-#ifdef HAVE_LLVM_RV
-      addVectorizeEnable = true;
-#endif
+      if (fRegionVectorizer)
+        addVectorizeEnable = true;
       loopMetadata = generateLoopMetadata(addVectorizeEnable);
       info->loopStack.emplace(loopMetadata, true);
     }

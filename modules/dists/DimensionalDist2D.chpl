@@ -284,7 +284,6 @@ private proc locDescTypeHelper(param rank : int, type idxType, dom1, dom2) type 
   return unmanaged LocDimensionalDom(domain(rank, idxType, str), d1type, d2type);
 }
 
-pragma "use default init"
 class DimensionalDom : BaseRectangularDom {
   // required
   const dist; // not reprivatized
@@ -332,7 +331,6 @@ class DimensionalDom : BaseRectangularDom {
   var localDdescs: [dist.targetIds] unmanaged locDescTypeHelper(rank, idxType, dom1, dom2); // locDdescType
 }
 
-pragma "use default init"
 class LocDimensionalDom {
   type myStorageDomT;
 
@@ -355,7 +353,6 @@ class LocDimensionalDom {
   }
 }
 
-pragma "use default init"
 class DimensionalArr : BaseRectangularArr {
   // required
   const dom; // must be a DimensionalDom
@@ -374,7 +371,6 @@ class DimensionalArr : BaseRectangularArr {
                       unmanaged LocDimensionalArr(eltType, allocDom.locDdescType);
 }
 
-pragma "use default init"
 class LocDimensionalArr {
   type eltType;
   const locDom;  // a LocDimensionalDom
@@ -760,7 +756,7 @@ proc DimensionalDom.dsiLow                return whole.low;
 proc DimensionalDom.dsiHigh               return whole.high;
 proc DimensionalDom.dsiStride             return whole.stride;
 proc DimensionalDom.dsiNumIndices         return whole.numIndices;
-proc DimensionalDom.dsiMember(indexx)     return whole.member(indexx);
+proc DimensionalDom.dsiMember(indexx)     return whole.contains(indexx);
 proc DimensionalDom.dsiIndexOrder(indexx) return whole.indexOrder(indexx);
 
 proc DimensionalDom.dimSpecifier(param dim: int) {
@@ -970,7 +966,7 @@ proc DimensionalDom.dsiBuildArray(type eltType)
 }
 
 
-proc DimensionalDom.dsiDestroyDom() {
+override proc DimensionalDom.dsiDestroyDom() {
   coforall desc in localDdescs do
     on desc do
       delete desc;

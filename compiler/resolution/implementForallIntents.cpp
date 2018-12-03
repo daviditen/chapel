@@ -814,10 +814,10 @@ void implementForallIntents1(DefExpr* defChplIter)
 // Todo: for a given leader, we could also cache specializations
 // for each set of outer variables that we have seen.
 // Like SymbolMapCache?
-Map<FnSymbol*,FnSymbol*> pristineLeaderIterators;
+static Map<FnSymbol*,FnSymbol*> pristineLeaderIterators;
 
 
-FnSymbol* copyLeaderFn(FnSymbol* origFn, bool ignore_isResolved) {
+static FnSymbol* copyLeaderFn(FnSymbol* origFn, bool ignore_isResolved) {
   SET_LINENO(origFn->defPoint);
   FnSymbol* copyFn = origFn->copy();
   copyFn->addFlag(FLAG_INVISIBLE_FN);
@@ -941,7 +941,7 @@ static void propagateExtraArgsForLoopIter(CallExpr* call,
 //
 // TODO: this code may no longer be necessary now that localizeReturnSymbols
 // has been removed.
-VarSymbol* localizeYieldForExtendLeader(Expr* origRetExpr, Expr* ref) {
+static VarSymbol* localizeYieldForExtendLeader(Expr* origRetExpr, Expr* ref) {
   SymExpr* orse = toSymExpr(origRetExpr);
   INT_ASSERT(orse);
   Symbol* origRetSym = orse->symbol();
@@ -1128,10 +1128,8 @@ static Symbol* createShadowVarIfNeeded(ShadowVarSymbol *shadowvar,
         // For these intents, OK to go without a new shadow variable.
         return svar;
 
-      case TFI_IN_OUTERVAR:
       case TFI_IN:
       case TFI_REDUCE:
-      case TFI_REDUCE_OP:
       case TFI_TASK_PRIVATE:
         // May result in data races or incorrect behavior
         // if we don't handle multiple enclosing foralls.
@@ -1140,6 +1138,13 @@ static Symbol* createShadowVarIfNeeded(ShadowVarSymbol *shadowvar,
         USR_PRINT(efs2, "the next enclosing forall statement is here");
         // If we continue, we may get a const violation on x*_shadowVarReduc.
         USR_STOP();
+        break;
+
+      case TFI_IN_PARENT:
+      case TFI_REDUCE_OP:
+      case TFI_REDUCE_PARENT_AS:
+      case TFI_REDUCE_PARENT_OP:
+        // The error should be reported in the TFI_IN/TFI_REDUCE case above.
         break;
 
       case TFI_DEFAULT:
@@ -1189,7 +1194,7 @@ static Symbol* createShadowVarIfNeeded(ShadowVarSymbol *shadowvar,
 // within PWL.  We *need* to bypass the machinery related to handling the
 // loop index - otherwise an extraneous new x1_svarRef will be generated.
 //
-void addArgsToToLeaderCallForPromotionWrapper(FnSymbol* fn,
+static void addArgsToToLeaderCallForPromotionWrapper(FnSymbol* fn,
                                                      int numExtraArgs,
                                                      Symbol* extraFormals[])
 {
@@ -1676,7 +1681,7 @@ static void extendLeader(CallExpr* call, CallExpr* origToLeaderCall,
   }
 
   FnSymbol* iterFn = copyLeaderFn(origIterFn, /*ignore_isResolved:*/false);
-  iterFn->instantiationPoint = getVisibilityBlock(call);
+  iterFn->setInstantiationPoint(call);
   call->baseExpr->replace(new SymExpr(iterFn));
 
   int numExtraArgs = origToLeaderCall->numActuals()-1;
@@ -1707,7 +1712,7 @@ void implementForallIntents2(CallExpr* call, CallExpr* origToLeaderCall) {
       stashPristineCopyOfLeaderIter(origLeader, /*ignore_isResolved:*/ false);
     }
   } else {
-    if (strncmp(origLeader->name, astr_loopexpr_iter, strlen(astr_loopexpr_iter)) == 0) {
+    if (isLoopExprFun(origLeader)) {
       propagateExtraArgsForLoopIter(call, origToLeaderCall, origLeader);
     } else {
       extendLeader(call, origToLeaderCall, origLeader);
@@ -1773,7 +1778,7 @@ void implementForallIntents2wrapper(CallExpr* call, CallExpr* eflopiHelper)
     // and may be reused for an unrelated call. Create a clone.
     FnSymbol* wDest = dest->copy();
     wDest->addFlag(FLAG_INVISIBLE_FN);
-    wDest->instantiationPoint = getVisibilityBlock(call);
+    wDest->setInstantiationPoint(call);
     // Do we also need to update paramMap like in copyLeaderFn() ?
     dest->defPoint->insertAfter(new DefExpr(wDest));
     call->baseExpr->replace(new SymExpr(wDest));
@@ -1835,89 +1840,15 @@ void implementForallIntents2wrapper(CallExpr* call, CallExpr* eflopiHelper)
 
 //
 //-----------------------------------------------------------------------------
-//  implementForallIntentsNew()
+//  setupAndResolveShadowVars()
 //-----------------------------------------------------------------------------
 //
-// The counterparts of implementForallIntents1() and implementForallIntents2()
-// for the (new) ForallStmt-based representation.
+// It is the counterpart of implementForallIntents1()
+// for the "new" ForallStmt-based representation.
 //
 
 /////////////////////////////////////////////////////////////////////////////
-// ForallIntentTag <-> IntentTag
-
-IntentTag argIntentForForallIntent(ForallIntentTag tfi) {
-  switch (tfi) {
-    case TFI_DEFAULT:      return INTENT_BLANK;
-    case TFI_CONST:        return INTENT_CONST;
-    case TFI_IN:           return INTENT_IN;
-    case TFI_CONST_IN:     return INTENT_CONST_IN;
-    case TFI_REF:          return INTENT_REF;
-    case TFI_CONST_REF:    return INTENT_CONST_REF;
-    case TFI_REDUCE_OP:    return INTENT_CONST_IN;  // the reduce op class
-
-    case TFI_IN_OUTERVAR:
-    case TFI_REDUCE:
-    case TFI_TASK_PRIVATE: INT_ASSERT(false);    // don't know what to return
-                           return INTENT_BLANK;  // dummy
-  }
-  INT_ASSERT(false);    // unexpected ForallIntentTag; 'tfi' contains garbage?
-  return INTENT_BLANK;  // dummy
-}
-
-static ForallIntentTag forallIntentForArgIntent(IntentTag intent) {
-  switch (intent)
-  {
-    case INTENT_IN:        return TFI_IN;
-    case INTENT_CONST:     return TFI_CONST;
-    case INTENT_CONST_IN:  return TFI_CONST_IN;
-    case INTENT_REF:       return TFI_REF;
-    case INTENT_CONST_REF: return TFI_CONST_REF;
-    case INTENT_BLANK:     return TFI_DEFAULT;
-    case INTENT_REF_MAYBE_CONST: return TFI_REF; //todo: TFI_REF_MAYBE_CONST ?
-
-    case INTENT_OUT:
-    case INTENT_INOUT:
-    case INTENT_PARAM:
-    case INTENT_TYPE:     INT_ASSERT(false);   // don't know what to return
-                          return TFI_DEFAULT;  // dummy
-  }
-  INT_ASSERT(false);   // unexpected IntentTag; 'intent' contains garbage?
-  return TFI_DEFAULT;  // dummy
-}
-
-static void resolveSVarIntent(ShadowVarSymbol* svar) {
-  // Special case for owned -- don't want ownership transfer on
-  // forall intent by default
-  if (svar->getValType()->symbol->hasFlag(FLAG_MANAGED_POINTER) &&
-      (svar->intent == TFI_DEFAULT || svar->intent == TFI_CONST)) {
-    svar->intent = TFI_CONST_REF;
-    return;
-  }
-
-  switch (svar->intent) {
-    case TFI_DEFAULT:
-      svar->intent = forallIntentForArgIntent(
-                       concreteIntent(INTENT_BLANK, svar->type->getValType()));
-      break;
-    case TFI_CONST:
-      svar->intent = forallIntentForArgIntent(
-                       concreteIntent(INTENT_CONST, svar->type->getValType()));
-      break;
-    case TFI_IN_OUTERVAR:
-    case TFI_IN:
-    case TFI_CONST_IN:
-    case TFI_REF:
-    case TFI_CONST_REF:
-    case TFI_REDUCE:
-    case TFI_REDUCE_OP:
-    case TFI_TASK_PRIVATE:
-      // nothing to do
-      break;
-  }
-}
-
-/////////////////////////////////////////////////////////////////////////////
-// findOuterVarsNew() and helpers
+// needsShadowVar() and helpers
 //
 
 // Is 'sym' defined outside 'block'?
@@ -1962,40 +1893,101 @@ static bool isFsShadowVar(ForallStmt* fs, Symbol* sym)
   return sym->defPoint->list == &fs->shadowVariables();
 }
 
-//
-// A forall-intents variation on findOuterVars() in createTaskFunctions.cpp:
-// Find all symbols used in 'block' and defined outside of it.
-//
-static void findOuterVarsNew(ForallStmt* fs, SymbolMap& outer2shadow,
-                             BlockStmt* block)
-{
-  std::vector<SymExpr*> symExprs;
-  collectSymExprs(block, symExprs);
+static bool needsShadowVar(ForallStmt* fs, BlockStmt* block, Symbol* sym) {
+  return
+    isLcnSymbol(sym)             && // include only variable-like things
+    sym->type != dtMethodToken   && // not a method token
+    sym->defPoint->parentSymbol != rootModule && // not a system symbol
+    !sym->isParameter()          && // not a param, including isImmediate()
+    !sym->hasFlag(FLAG_INSTANTIATED_PARAM) && // not a param, again
+    !sym->hasFlag(FLAG_TYPE_VARIABLE)      && // not a type alias or formal
+    !sym->hasFlag(FLAG_TEMP)     && // not a temp
+    !isFsIndexVar(fs, sym)       && // not fs's index var
+    !isFsShadowVar(fs, sym)      && // not fs's shadow var
+    isOuterVarNew(sym, block);      // it must be an outer variable
+}
 
-  for_vector(SymExpr, symExpr, symExprs) {
-    Symbol* sym = symExpr->symbol();
+/////////////////////////////////////////////////////////////////////////////
+// handle void shadow vars or outer vars
+//
 
-    if (isLcnSymbol(sym)             && // include only variable-like things
-        sym->type != dtMethodToken   && // not a method token
-        sym->defPoint->parentSymbol != rootModule && // not a system symbol
-        !sym->isParameter()          && // not a param, including isImmediate()
-        !sym->hasFlag(FLAG_INSTANTIATED_PARAM) && // not a param, again
-        !sym->hasFlag(FLAG_TYPE_VARIABLE)      && // not a type alias or formal
-        !sym->hasFlag(FLAG_TEMP)     && // not a temp
-        !isFsIndexVar(fs, sym)       && // not fs's index var
-        !isFsShadowVar(fs, sym)      && // not fs's intent var
-        !sym->hasFlag(FLAG_ARG_THIS) && // todo: no special case for 'this'
-        isOuterVarNew(sym, block)       // it must be an outer variable
-    ) {
-      // if not there already
-      if (!outer2shadow.get(sym)) {
-        // OK, add it
-        ShadowVarSymbol* ss = new ShadowVarSymbol(TFI_DEFAULT, sym->name,
-                                                  new SymExpr(sym));
-        outer2shadow.put(sym, ss);
-      }
+//
+// We should keep all reduction shadow vars in the AST to preserve
+// well-formedness of the sequence (PRP, PAS, RP, AS).
+// Even if one of them is void, AS->initBlock()/deinitBlock() may still
+// contain meaningful actions. Otherwise we could toss all four of them.
+//
+bool preserveShadowVar(Symbol* var) {
+  if (ShadowVarSymbol* svar = toShadowVarSymbol(var)) {
+    switch (svar->intent) {
+      case TFI_REDUCE:
+      case TFI_REDUCE_OP:
+      case TFI_REDUCE_PARENT_AS:
+      case TFI_REDUCE_PARENT_OP:
+        return true;
+
+      default:
+        break; // handle normally
     }
   }
+
+  return false;
+}
+
+// If an outer var is void, it was probably pruned.
+// Replace it with _void.
+void adjustVoidShadowVariables() {
+  forv_Vec(ShadowVarSymbol, svar, gShadowVarSymbols)
+    if (svar->inTree())
+      if (Symbol* ovar = svar->outerVarSym())
+        if (ovar->type == dtVoid) {
+          SET_LINENO(svar);
+          svar->outerVarSE->replace(new SymExpr(gVoid));
+        }
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// setup support helpers
+//
+
+// insertInitialization() flavors:
+//  (a1) initialize an arbitrary Symbol, place it in a BlockStmt, or
+//  (a2) initialize a ShadowVarSymbol, place it in its initBlock();
+//  (b1) initialize from a Symbol, or
+//  (b2) initialize from an Expr, computing it into a temp.
+
+static void insertInitialization(BlockStmt* destBlock,
+                                 Symbol* destVar, Symbol* srcVar) {
+  destBlock->insertAtTail("'init var'(%S,%S)", destVar, srcVar);
+}
+
+static void insertInitialization(ShadowVarSymbol* destVar, Symbol* srcVar) {
+  insertInitialization(destVar->initBlock(), destVar, srcVar);
+}
+
+static void insertInitialization(BlockStmt* destBlock,
+                                 Symbol* destVar, Expr* srcExpr) {
+
+  Expr* initCall = new_Expr("'init var'(%S,%E)", destVar, srcExpr);
+  destBlock->insertAtTail(initCall);
+  normalize(initCall);
+}
+
+// insertDeinitialization() flavors: as (a1) or (a2) above
+
+static void insertDeinitialization(BlockStmt* destBlock, Symbol* destVar) {
+  // NB if we use PRIM_CALL_DESTRUCTOR, we end up with
+  // deinit() calls for shadow variables of class types.
+  destBlock->insertAtTail("chpl__autoDestroy(%S)", destVar);
+}
+
+static void insertDeinitialization(ShadowVarSymbol* destVar) {
+  insertDeinitialization(destVar->deinitBlock(), destVar);
+}
+
+static void resolveOneShadowVar(ForallStmt* fs, ShadowVarSymbol* svar) {
+  resolveBlockStmt(svar->initBlock());
+  resolveBlockStmt(svar->deinitBlock());
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -2052,6 +2044,8 @@ static void insertFinalGenerate(Expr* ref, Symbol* fiVarSym, Symbol* globalOp) {
   Expr* next = ref->next; // nicer ordering of the following insertions
   INT_ASSERT(next);
   VarSymbol* genTemp = newTemp("chpl_gentemp");
+  // TODO: Should we try to free chpl_gentemp right after the assignment?
+  genTemp->addFlag(FLAG_INSERT_AUTO_DESTROY);
   next->insertBefore(new DefExpr(genTemp));
   next->insertBefore("'move'(%S, generate(%S,%S))",
                      genTemp, gMethodToken, globalOp);
@@ -2069,12 +2063,15 @@ static void moveInstantiationPoint(BlockStmt* to, BlockStmt* from, Type* type) {
   // This snippet updates the instantiation point of the reduction class and
   // its methods to point to the surviving Block (parent of 'hld').
   //
+  // Vass 2018-08-01: Does not look like we can remove this yet. See ex.:
+  //   release/examples/benchmarks/isx
+  //   parallel/forall/reduce-intents
   AggregateType* reductionClass = toAggregateType(canonicalClassType(type));
   if (reductionClass->symbol->instantiationPoint == from) {
     reductionClass->symbol->instantiationPoint = to;
     forv_Vec(FnSymbol, fn, reductionClass->methods) {
-      if (fn->instantiationPoint == from) {
-        fn->instantiationPoint = to;
+      if (fn->instantiationPoint() == from) {
+        fn->setInstantiationPoint(to);
       }
     }
   }
@@ -2087,7 +2084,7 @@ static Symbol* setupRiGlobalOp(ForallStmt* fs, Symbol* fiVarSym,
   BlockStmt* hld = new BlockStmt(); // "holder"
   fs->insertBefore(hld);
       
-  VarSymbol* globalOp =  newTemp("chpl__reduceGlob");
+  VarSymbol* globalOp = newTemp(astr("globalRP_", fiVarSym->name));
   hld->insertAtTail(new DefExpr(globalOp));
 
   if (!eltTypeArg) {
@@ -2127,8 +2124,6 @@ static Symbol* setupRiGlobalOp(ForallStmt* fs, Symbol* fiVarSym,
 
   hld->flattenAndRemove();
 
-  // Todo: this replace() is somewhat expensive.
-  // Can instead we update fs->riSpecs[i] aka 'riSpec' in-place?
   origRiSpec->replace(new SymExpr(globalOp));
   
   return globalOp;
@@ -2136,10 +2131,6 @@ static Symbol* setupRiGlobalOp(ForallStmt* fs, Symbol* fiVarSym,
 
 static void handleRISpec(ForallStmt* fs, ShadowVarSymbol* svar)
 {
-  if (svar->reduceGlobalOp != NULL)
-    // Already handled, ex. in tupcomForYieldInForall().
-    return;
-
   Symbol* globalOp = NULL;
   Symbol* fiVarSym = svar->outerVarSym();
   Expr*   riSpec   = svar->reduceOpExpr();
@@ -2179,300 +2170,534 @@ static void handleRISpec(ForallStmt* fs, ShadowVarSymbol* svar)
     // What else can this be?
     INT_FATAL(fs, "not implemented");
   }
+  // Removing 'globalOp' is left as future work.
+  if (globalOp) INT_ASSERT(globalOp); // dummy use of 'globalOp'
+}
 
-  svar->reduceGlobalOp = globalOp;
+void  setReduceSVars(ShadowVarSymbol*& PRP, ShadowVarSymbol*& PAS,
+                     ShadowVarSymbol*& RP, ShadowVarSymbol* AS)
+{
+  DefExpr* defRP  = toDefExpr(AS->defPoint->prev);
+  DefExpr* defPAS = toDefExpr(defRP->prev);
+  DefExpr* defPRP = toDefExpr(defPAS->prev);
+
+  RP  = toShadowVarSymbol(defRP->sym);
+  PAS = toShadowVarSymbol(defPAS->sym);
+  PRP = toShadowVarSymbol(defPRP->sym);
+
+  INT_ASSERT(AS->intent  == TFI_REDUCE);
+  INT_ASSERT(RP->intent  == TFI_REDUCE_OP);
+  INT_ASSERT(PAS->intent == TFI_REDUCE_PARENT_AS);
+  INT_ASSERT(PRP->intent == TFI_REDUCE_PARENT_OP);
+}
+
+static ShadowVarSymbol* create_REDUCE_PRP(ForallStmt* fs, ShadowVarSymbol* AS)
+{
+  // This is the global reduce op, either provided by user or set up by us.
+  // PRP->outerVarSE will point to it.
+  SymExpr* gOpSE = toSymExpr(AS->reduceOpExpr()->remove());
+  Symbol*  gOp   = gOpSE->symbol();
+  // Handling of the case of gOp being a type should have happened earlier.
+  INT_ASSERT(!gOp->hasFlag(FLAG_TYPE_VARIABLE));
+
+  ShadowVarSymbol* PRP = new ShadowVarSymbol(TFI_REDUCE_PARENT_OP,
+                                             astr("PRP_", AS->name), gOpSE);
+
+  // It always points to the same reduction op class instance.
+  PRP->addFlag(FLAG_CONST);
+  PRP->qual = QUAL_CONST_VAL;
+  PRP->type = gOp->type;
+
+  // It goes on the shadow variable list before AS.
+  AS->defPoint->insertBefore(new DefExpr(PRP));
+
+  return PRP;
+}
+
+static ShadowVarSymbol* create_REDUCE_PAS(ForallStmt* fs, ShadowVarSymbol* AS)
+{
+  ShadowVarSymbol* PAS = new ShadowVarSymbol(TFI_REDUCE_PARENT_AS,
+                                             astr("PAS_", AS->name), NULL);
+  PAS->qual = QUAL_VAL;
+  PAS->type = AS->type;
+
+  // It goes on the shadow variable list before AS, after PRP.
+  AS->defPoint->insertBefore(new DefExpr(PAS));
+
+  return PAS;
+}
+
+static ShadowVarSymbol* create_REDUCE_RP(ForallStmt* fs, ShadowVarSymbol* PRP,
+                                         ShadowVarSymbol* AS)
+{
+  ShadowVarSymbol* RP = new ShadowVarSymbol(TFI_REDUCE_OP,
+                                            astr("RP_", AS->name), NULL);
+
+  // It always points to the same reduction op class instance.
+  RP->addFlag(FLAG_CONST);
+  RP->qual = QUAL_CONST_VAL;
+  RP->type = PRP->type;
+
+  // It goes on the shadow variable list right before AS.
+  AS->defPoint->insertBefore(new DefExpr(RP));
+  INT_ASSERT(AS->ReduceOpForAccumState() == RP); //ReduceOpForAccumState() OK?
+
+  return RP;
+}
+
+static void setupForReduce(ForallStmt* fs,
+                           ShadowVarSymbol* PRP, ShadowVarSymbol* PAS,
+                           ShadowVarSymbol* RP,  ShadowVarSymbol* AS)
+{
+  // Put everything in AS's init/deinit block. No need to use the others'.
+  BlockStmt* IB  = AS->initBlock();
+  BlockStmt* DB  = AS->deinitBlock();
+
+  /// at task startup ///
+  insertInitialization(IB, RP, new_Expr("clone(%S,%S)", gMethodToken, PRP));
+  insertInitialization(IB, AS, new_Expr("identity(%S,%S)", gMethodToken, RP));
+
+  /// at task teardown ///
+  DB->insertAtTail("accumulate(%S,%S,%S)", gMethodToken, RP, AS);
+  insertDeinitialization(DB, AS);
+  DB->insertAtTail("chpl__reduceCombine(%S,%S)", PRP, RP);
+  DB->insertAtTail("chpl__cleanupLocalOp(%S,%S)", PRP, RP); // deletes RP
+
+  // At the top level, we have global RP and global AS.
+  // The global RP has already been set up. On to the global AS.
+  Symbol*    globalRP = PRP->outerVarSym();
+  VarSymbol* globalAS = new VarSymbol(astr("globalAS_", AS->name), AS->type);
+  globalAS->qual = QUAL_VAL;
+
+  PAS->outerVarSE = new SymExpr(globalAS);
+  insert_help(PAS->outerVarSE, NULL, PAS);
+
+  /// before the forall ///
+  BlockStmt* holder1 = new BlockStmt();
+  fs->insertBefore(holder1);
+  holder1->insertAtTail(new DefExpr(globalAS));
+  insertInitialization(holder1, globalAS,
+                       new_Expr("identity(%S,%S)", gMethodToken, globalRP));
+  resolveBlockStmt(holder1);
+  PAS->type = globalAS->type; // now that we know it
+  holder1->flattenAndRemove();
+
+  /// after the forall ///
+  BlockStmt* holder2 = new BlockStmt();
+  fs->insertAfter(holder2);
+  holder2->insertAtTail("accumulate(%S,%S,%S)",
+                        gMethodToken, globalRP, globalAS);
+  insertDeinitialization(holder2, globalAS);
+  // the contents will be resolved after resolving 'fs'
+  holder2->flattenAndRemove();
+}
+
+static void handleReduce(ForallStmt* fs, ShadowVarSymbol* AS) {
+  handleRISpec(fs, AS);
+
+  Symbol* ASovar = AS->outerVarSym();
+  if (ASovar && ASovar->hasFlag(FLAG_CONST)) {
+    USR_FATAL_CONT(fs,
+      "reduce intent is applied to a 'const' variable %s", ASovar->name);
+  }
+
+  // The AS shadow var is a reference to the accumulation state.
+  // Cf. RP is the reduce op.  PAS / PRP are like AS / RP.
+  AS->addFlag(FLAG_REF_VAR);
+  AS->qual = QUAL_REF;
+  AS->type = dtUnknown;
+
+  // PRP, PAS, RP precede AS in fs->shadowVariables() in this order.
+  ShadowVarSymbol* PRP = create_REDUCE_PRP(fs, AS);
+  ShadowVarSymbol* PAS = create_REDUCE_PAS(fs, AS);
+  ShadowVarSymbol* RP  = create_REDUCE_RP(fs, PRP, AS);
+  setupForReduce(fs, PRP, PAS, RP, AS);
+
+  // Ensure setReduceSVars() works.
+  ShadowVarSymbol *PRP1=0, *PAS1=0, *RP1=0;
+  setReduceSVars(PRP1, PAS1, RP1, AS);
+  INT_ASSERT(PRP1 == PRP);
+  INT_ASSERT(PAS1 == PAS);
+  INT_ASSERT(RP1  == RP);
 }
 
 /////////////////////////////////////////////////////////////////////////////
+// handleOneShadowVar()
+//
 
-// These are additional blocks to look into for outer/shadow variables.
-#define for_additional_blocks(SVAR,BLOCK,TEMP,FORALL) \
-  for_shadow_vars(SVAR,TEMP,FORALL)                   \
-    if (SVAR->isTaskPrivate())                        \
-      if (BlockStmt* BLOCK = SVAR->initBlock())       \
-        if (!BLOCK->body.empty())
-
-static void getOuterVarsNew(ForallStmt* fs, SymbolMap& outer2shadow)
+static ShadowVarSymbol* create_IN_Parentvar(ForallStmt* fs,
+                                            ShadowVarSymbol* SI,
+                                            Symbol* userOuterVar)
 {
-  if (fs->needToHandleOuterVars()) {
-    for_additional_blocks(svar, initB, temp, fs)
-      findOuterVarsNew(fs, outer2shadow, initB);
+  ShadowVarSymbol* INP = new ShadowVarSymbol(TFI_IN_PARENT,
+                                             astr("INP_", SI->name), NULL);
+  INP->addFlag(FLAG_CONST);  // make it be like 'const in'
+  INP->qual = QUAL_CONST_VAL;
+  INP->type = SI->type;
 
-    // do the same as in 'if (needsCapture(fn))' in createTaskFunctions()
-    findOuterVarsNew(fs, outer2shadow, fs->loopBody());
+  // INP goes on the shadow variable list right before SI.
+  SI->defPoint->insertBefore(new DefExpr(INP));
+  INT_ASSERT(SI->ParentvarForIN() == INP);  // ensure ParentvarForIN() works
+
+  Symbol* INPovar = userOuterVar;
+
+  if (userOuterVar->getValType() != SI->type) {
+    // For example, when userOuterVar is "owned" and SI is "borrowed".
+    BlockStmt* holder  = new BlockStmt();
+    CallExpr*  cast    = createCast(userOuterVar, SI->type->symbol);
+    VarSymbol* inptemp = newTempConst("INPtemp", SI->type);
+    inptemp->qual      = QUAL_CONST_VAL;
+
+    fs->insertBefore(holder);
+    holder->insertAtTail(new DefExpr(inptemp));
+    insertInitialization(holder, inptemp, cast);
+    resolveBlockStmt(holder);
+    holder->flattenAndRemove();
+
+    INPovar = inptemp;
   }
 
-  for_shadow_vars(sv, temp, fs)
-    if (sv->isReduce())
-      handleRISpec(fs, sv);
+  INP->outerVarSE = new SymExpr(INPovar);
+  insert_help(INP->outerVarSE, NULL, INP);
+
+  return INP;
 }
 
-// Append the new ShadowVarSymbols we accumulated to fs->shadowVariables().
-static void appendNewShadowVars(ForallStmt* fs, SymbolMap& outer2shadow) {
-  form_Map(SymbolMapElem, elem, outer2shadow)
-    fs->shadowVariables().insertAtTail(new DefExpr(elem->value));
-}
-
-// Not to be invoked upon a reduce intent.
-// TODO aren't these flags already set?
-// Except for FLAG_CONST_DUE_TO_TASK_FORALL_INTENT.
-static void setShadowVarFlagsNew(Symbol* ovar, ShadowVarSymbol* svar, IntentTag intent) {
-  // These do not make sense for task/forall intents.
-  INT_ASSERT(!(intent & (INTENT_FLAG_PARAM | INTENT_FLAG_TYPE)));
-  // If this assert fails, we need to handle this case.
-  INT_ASSERT(!(intent & INTENT_FLAG_OUT));
-
-  if (intent & INTENT_FLAG_REF)
-  {
-    if (intent & INTENT_FLAG_CONST) {
-      svar->addFlag(FLAG_CONST);
-      svar->qual = QUAL_CONST_REF;
-    } else {
-      svar->qual = QUAL_REF;
-    }
-    svar->addFlag(FLAG_REF_VAR);
-    if (ovar->isConstValWillNotChange())
-      svar->addFlag(FLAG_REF_TO_IMMUTABLE);
-  }
-  else
-  {
-    if (intent & INTENT_FLAG_CONST) {
-      svar->addFlag(FLAG_CONST);
-      svar->qual = QUAL_CONST_VAL;
-    } else {
-      svar->qual = QUAL_VAL;
-    }
-    svar->type = svar->type->getValType();
-  }
-  if (svar->isConstant() && !ovar->isConstant())
+static void constDueToTFI(ShadowVarSymbol* svar, Symbol* ovar) {
+  if (!ovar->isConstant())
     svar->addFlag(FLAG_CONST_DUE_TO_TASK_FORALL_INTENT);
 }
 
-// Todo: is now time to get rid of pruning?
-static void processShadowVarsNew(ForallStmt* fs, int& numShadowVars)
-{
-  // todo: prune right away, get rid of 'numShadowVars'
+static void handleIn(ForallStmt* fs, ShadowVarSymbol* SI, bool isConst) {
+  Symbol* ovar = SI->outerVarSym();
 
-  for_shadow_vars(svar, temp, fs) {
-    Symbol* ovar = svar->outerVarSym();
-    if (svar->isReduce())
-    {
-      if (ovar && ovar->hasFlag(FLAG_CONST))
-        USR_FATAL_CONT(fs,
-          "reduce intent is applied to a 'const' variable %s", ovar->name);
-
-      // The shadow variable will assume the reference from the leadIdx tuple.
-      svar->addFlag(FLAG_REF_VAR);
-      svar->qual = QUAL_REF;
-      svar->type = dtUnknown;
-    }
-    else if (svar->isTaskPrivate())
-    {
-      // Anything to do here?
-    }
-    else
-    {
-      svar->type = ovar->type->getRefType();
-      resolveSVarIntent(svar);
-
-      // If ovar is a reference, e.g. an index variable of
-      // a 'var' iterator, we do not want to force
-      // that ref type onto 'svar'. Otherwise the generated
-      // code will store into *svar without initializing svar
-      // first. Todo: what if ovar is a domain?
-      Type* valtype = ovar->type->getValType();
-
-      IntentTag  tiIntent =
-        concreteIntent(argIntentForForallIntent(svar->intent), valtype);
-
-      // See if we want to prune it.
-      bool pruneit = false;
-
-      if (tiIntent == INTENT_REF || tiIntent == INTENT_REF_MAYBE_CONST) {
-        // do we want this? does this lead to more efficient generated code?
-         pruneit = true;
-
-      } else if (isAtomicType(ovar->type)) {
-        // Currently we need it because sync variables do not get tupled
-        // and detupled properly when threading through the leader iterator.
-        // See e.g. test/distributions/dm/s7.chpl
-        // Atomic vars might not work either.
-        // And anyway, only 'ref' intent makes sense here.
-        pruneit = true;
-
-        USR_WARN(fs, "an atomic var currently can be passed into a forall loop by 'ref' intent only - %s is ignored for '%s'", intentDescrString(tiIntent), ovar->name);
-      }
-
-      if (pruneit) {
-        // Todo: remove it from fs->shadowVariables() right away.
-        svar->pruneit = true;
-        continue; // for_shadow_vars
-      }
-
-      setShadowVarFlagsNew(ovar, svar, tiIntent);
-    }
-    numShadowVars++;
+  if (isConst) {
+    SI->addFlag(FLAG_CONST);
+    SI->qual = QUAL_CONST_VAL;
+    constDueToTFI(SI, ovar);
+  } else {
+    SI->qual = QUAL_VAL;
   }
+  INT_ASSERT(!SI->isRef());
+
+  ShadowVarSymbol* INP = create_IN_Parentvar(fs, SI, ovar);
+  insertInitialization(SI, INP);
+  insertDeinitialization(SI);
+
+  resolveOneShadowVar(fs, INP);
+}
+
+static void handleRef(ForallStmt* fs, ShadowVarSymbol* SR, bool isConst) {
+  Symbol* ovar = SR->outerVarSym();
+  if (isConst) {
+    SR->addFlag(FLAG_CONST);
+    SR->qual = QUAL_CONST_REF;
+    constDueToTFI(SR, ovar);
+  } else {
+    SR->qual = QUAL_REF;
+  }
+  SR->addFlag(FLAG_REF_VAR);
+  INT_ASSERT(SR->isRef());
+  if (ovar->isConstValWillNotChange())
+    SR->addFlag(FLAG_REF_TO_IMMUTABLE);
+}
+
+static void handleTaskPrivate(ForallStmt* fs, ShadowVarSymbol* TPV) {
+  // initBlock() already comes from TPV's declaration in the with-clause,
+  // so nothing to do with it.
+
+  // Need deinitialization - for 'var'/'const' only. No deinit for refs.
+  if (!TPV->isRef())
+    insertDeinitialization(TPV);
+}
+
+static void handleOneShadowVar(ForallStmt* fs, ShadowVarSymbol* svar)
+{
+  if (svar->id == breakOnResolveID) gdbShouldBreakHere();
+
+  switch (svar->intent) {
+    case TFI_IN:           handleIn(fs, svar, false);   break;
+    case TFI_CONST_IN:     handleIn(fs, svar, true);    break;
+
+    case TFI_REF:          handleRef(fs, svar, false);  break;
+    case TFI_CONST_REF:    handleRef(fs, svar, true);   break;
+
+    case TFI_REDUCE:       handleReduce(fs, svar);      break;
+    case TFI_TASK_PRIVATE: handleTaskPrivate(fs, svar); break;
+
+    case TFI_DEFAULT:            // these should have been converted
+    case TFI_CONST:              INT_ASSERT(false);     break;
+
+    case TFI_IN_PARENT:          // these have not been created yet
+    case TFI_REDUCE_OP:
+    case TFI_REDUCE_PARENT_AS:
+    case TFI_REDUCE_PARENT_OP:   INT_ASSERT(false);     break;
+  }
+
+  resolveOneShadowVar(fs, svar);
 }
 
 /////////////////////////////////////////////////////////////////////////////
+// determine concrete intent and whether to prune
+//
+
+static ForallIntentTag forallIntentForArgIntent(IntentTag intent) {
+  switch (intent)
+  {
+    case INTENT_IN:        return TFI_IN;
+    case INTENT_CONST:     return TFI_CONST;
+    case INTENT_CONST_IN:  return TFI_CONST_IN;
+    case INTENT_REF:       return TFI_REF;
+    case INTENT_CONST_REF: return TFI_CONST_REF;
+    case INTENT_BLANK:     return TFI_DEFAULT;
+    case INTENT_REF_MAYBE_CONST: return TFI_REF; //todo: TFI_REF_MAYBE_CONST ?
+
+    case INTENT_OUT:
+    case INTENT_INOUT:
+    case INTENT_PARAM:
+    case INTENT_TYPE:     INT_ASSERT(false);   // don't know what to return
+                          return TFI_DEFAULT;  // dummy
+  }
+  INT_ASSERT(false);   // unexpected IntentTag; 'intent' contains garbage?
+  return TFI_DEFAULT;  // dummy
+}
+
+/*
+Why prune?
+
+Historically, we have avoided using shadow variables in certain cases
+because of the complications that we would need to handle downstream
+in the compiler otherwise. As of this writing, only the ref-intents
+case remains.
+
+Examples of tests that fail without pruning under --local:
+ arrays/deitz/jacobi5
+ studies/hpcc/HPL/vass/bl.dim
+ studies/shootout/submitted/knucleotide
+ users/shetag/unboundslice
+
+Potential culprits:
+- choosing ref vs. const ref for INTENT_REF_MAYBE_CONST
+- more efficient access to the outer variable if it is a global
+  (for multilocale performance)
+- others?
+*/
 
 //
-// Undo the outerVar-to-shadowVar conversion inside 'body'
-// for those ShadowVarSymbols that are marked with 'pruneit'.
+// * If 'intent' is abstract, convert it to a concrete intent.
+// * 
+// It is done on an already-existing, explicit shadow variable
+// or before an implicit shadow variable is to be created.
 //
-// Ideally, we won't prune, so won't need to do this.
-//
-static void pruneShadowVars(ForallStmt* fs,
-                            SymbolMap& outer2shadow, int numInitialVars,
-                            int numShadowVars, bool& needToReplace)
+static void resolveShadowVarTypeIntent(Type*& type, ForallIntentTag& intent,
+                                       bool& prune)
 {
-  INT_ASSERT(fs->numShadowVars() > numShadowVars); // can be ==; shouldn't be <
+  switch (intent) {
+    case TFI_DEFAULT:
+    case TFI_CONST:
+    // Convert to a concrete intent.
+    {
+      Type* valType = type->getValType();
 
-  // There are two pieces to undo-ing a given shadow variable:
-  //  (a) replace its references within the loop body with its outer variable,
-  //  (b) remove its DefExpr.
-  //
-  // For (a): given that we have not yet performed the outer-to-shadow
-  // conversion within the loop body for the variables in 'outer2shadow',
-  // no need to undo them there. So we look only at the initial variables
-  // in fs->shadowVariables() before 'outer2shadow' kicked in.
-  //
-  // While there, we keep track of whether there is anything un-pruned left
-  // in outer2shadow using numToReplace.
-
-  int idx = 0;
-  bool needToRevert = false;
-  int  numToReplace = fs->numShadowVars() - numInitialVars;
-
-  for_shadow_var_defs(svd, temp, fs) {
-    ++idx;
-    if (ShadowVarSymbol* svs = toShadowVarSymbol(svd->sym)) {
-      if (svs->pruneit) {
-        svd->remove();
-        if (idx <= numInitialVars) {
-          needToRevert = true;
-        } else {
-          SymbolMapElem* elem = outer2shadow.get_record(svs->outerVarSym());
-          INT_ASSERT(elem);
-          elem->value = markPruned;
-          numToReplace--;
-        }
+      // For managed pointers, don't do ownership transfer by default.
+      // Instead, use the borrow type for the shadow variable.
+      if (isManagedPtrType(valType)) {
+        type    = getManagedPtrBorrowType(valType);
+        valType = type->getValType();
       }
+
+      IntentTag argInt = (intent == TFI_DEFAULT) ? INTENT_BLANK : INTENT_CONST;
+      intent = forallIntentForArgIntent(concreteIntent(argInt, valType));
+
+      break;
     }
+
+    case TFI_IN:               // Nothing to do for now.
+    case TFI_CONST_IN:
+    case TFI_REF:
+    case TFI_CONST_REF:
+    case TFI_REDUCE:
+    case TFI_TASK_PRIVATE:      break;
+
+    case TFI_IN_PARENT:         // These have not been created yet.
+    case TFI_REDUCE_OP:
+    case TFI_REDUCE_PARENT_AS:
+    case TFI_REDUCE_PARENT_OP:  INT_ASSERT(false);  break;
   }
 
-  if (needToRevert) {
-    std::vector<SymExpr*> symExprs;
-    for_additional_blocks(svar, initB, temp, fs)
-      collectSymExprs(initB, symExprs);
-    collectSymExprs(fs->loopBody(), symExprs);
-    for_vector(SymExpr, se, symExprs)
-      if (ShadowVarSymbol* svar = toShadowVarSymbol(se->symbol()))
-        if (svar->pruneit)
-          se->setSymbol(svar->outerVarSym());
+  // Enforce val type for in- and ref-intents.
+  switch (intent) {
+    case TFI_IN:
+    case TFI_CONST_IN:
+    case TFI_REF:
+    case TFI_CONST_REF:         type = type->getValType(); break;
+
+    case TFI_REDUCE:            // Nothing to do for now.
+    case TFI_TASK_PRIVATE:      break;
+
+    case TFI_DEFAULT:           // We just eliminated these.
+    case TFI_CONST:             INT_ASSERT(false); break;
+
+    case TFI_IN_PARENT:         // These have not been created yet.
+    case TFI_REDUCE_OP:
+    case TFI_REDUCE_PARENT_AS:
+    case TFI_REDUCE_PARENT_OP:  INT_ASSERT(false);  break;
   }
 
-  // otherwise ensure there is nothing to replace
-  if (fVerify && !needToRevert) {
-    std::vector<SymExpr*> symExprs;
-    for_additional_blocks(svar, initB, temp, fs)
-      collectSymExprs(initB, symExprs);
-    collectSymExprs(fs->loopBody(), symExprs);
-    for_vector(SymExpr, se, symExprs)
-      if (ShadowVarSymbol* svar = toShadowVarSymbol(se->symbol()))
-        INT_ASSERT(!svar->pruneit);
-  }
-
-  if (numToReplace > 0)
-    needToReplace = true;
+  // Prune, as discussed in the above comment.
+  if (intent == TFI_REF)
+    prune = true;
 }
 
 /////////////////////////////////////////////////////////////////////////////
+// handle implicit vs. explicit shadow variables
+//
 
-// Same as replaceVarUses() in createTaskFunctions.
-static void replaceVarUsesNew(ForallStmt* fs, SymbolMap& outer2shadow) {
+//
+// A forall-intents variation on findOuterVars() in createTaskFunctions.cpp:
+// Find all symbols used in 'block' and defined outside of it.
+//
+// For each found symbol, see if it needs a ShadowVarSymbol.
+// If so, create one, add it to fs->shadowVariables() and to 'toReplace'.
+// Otherwise, map it to markPruned in 'toReplace'.
+//
+// At the same time, perform the substitutions already in 'toReplace'
+// except markPruned.
+//
+static void doImplicitShadowVars(ForallStmt* fs, BlockStmt* block,
+                                 SymbolMap& outer2shadow)
+{
   std::vector<SymExpr*> symExprs;
-  for_additional_blocks(svar, initB, temp, fs)
-    collectSymExprs(initB, symExprs);
-  collectSymExprs(fs->loopBody(), symExprs);
+  collectSymExprs(block, symExprs);
 
-  form_Map(SymbolMapElem, e, outer2shadow) {
-    if (e->value == markPruned)
+  for_vector(SymExpr, se, symExprs) {
+    Symbol* sym = se->symbol();
+
+    if (!isLcnSymbol(sym)) // quick filter
       continue;
-    Symbol* oldSym = e->key;
-    Symbol* newSym = e->value;
-    INT_ASSERT(!toShadowVarSymbol(newSym)->pruneit);
-    for_vector(SymExpr, se, symExprs)
-      if (se->symbol() == oldSym)
-        se->setSymbol(newSym);
+
+    if (Symbol* sub = outer2shadow.get(sym)) { // already know how to handle?
+      if (sub != markPruned)
+        se->setSymbol(sub); // substitute
+      continue;
+    }
+
+    if (!needsShadowVar(fs, block, sym)) { // do not convert to shadow var
+      outer2shadow.put(sym, markPruned);
+      continue;
+    }
+
+    ForallIntentTag intent = TFI_DEFAULT;
+    Type* type  = sym->type;
+    bool  prune = false;
+    resolveShadowVarTypeIntent(type, intent, prune); // updates the args
+
+    if (prune) {                      // do not convert to shadow var
+      outer2shadow.put(sym, markPruned);
+      continue;
+    }
+
+    // Yes, convert to a shadow variable.
+    ShadowVarSymbol* svar = new ShadowVarSymbol(intent, sym->name,
+                                                new SymExpr(sym));
+    svar->type = type;
+    fs->shadowVariables().insertAtTail(new DefExpr(svar));
+
+    handleOneShadowVar(fs, svar);
+
+    outer2shadow.put(sym, svar); // mark it for substitution
+    se->setSymbol(svar);
   }
 }
 
-/////////////////////////////////////////////////////////////////////////////
-
-static void implementForallIntents1New(ForallStmt* fs, CallExpr* parCall) {
-  SymbolMap            outer2shadow;
-  BlockStmt*           forallBody1 = fs->loopBody();
-  int                  numShadowVars = 0;
-  bool                 needToReplace = false;
-  SET_LINENO(forallBody1);
-
-  getOuterVarsNew(fs, outer2shadow);
-
-  // At this point, fs->shadowVariables() and outer2shadow are disjoint sets.
-  //
-  // (A) fs->shadowVariables() correspond to the explicit intents
-  // in the with-clause. The occurrences of those variables in the loop body
-  // scopeResolve to the corresponding ShadowVarSymbols. getOuterVarsNew()
-  // does not perceive them as "outer".
-  //
-  // (B) The variables in outer2shadow are the ones mentioned in the loop body
-  // and not yet converted to shadow variables.
-  //
-  // appendNewShadowVars() adds the (B) vars to the (A) set.
-  // 'outer2shadow' stays unchanged.
-  // Save the size of (A) before the addition.
-  int numInitialVars = (fs->shadowVariables()).length;
-  appendNewShadowVars(fs, outer2shadow);
-
-  processShadowVarsNew(fs, numShadowVars); // updates numShadowVars
-
-  if (fs->numShadowVars() == numShadowVars)
-    needToReplace = (outer2shadow.n > 0);
-  else
-    pruneShadowVars(fs, outer2shadow, numInitialVars,
-                    numShadowVars, needToReplace); // updates needToReplace
-
-  if (needToReplace) {
-    INT_ASSERT(fs->numShadowVars() > 0);  // avoid unnecessary work
-    replaceVarUsesNew(fs, outer2shadow);
-  }
-}
-
-/////////////////////////////////////////////////////////////////////////////
-
-// implementForallIntentsNew() -- based on "new" ForallStmt representation
-
-static void checkForNonIterator(CallExpr* parCall) {
-  FnSymbol* dest = parCall->resolvedFunction();
-  AggregateType* retType = toAggregateType(dest->retType);
-  if (!retType || !retType->symbol->hasFlag(FLAG_ITERATOR_RECORD)) {
-    USR_FATAL_CONT(parCall, "The iterable-expression resolves to a non-iterator function '%s' when looking for a parallel iterator", dest->name);
-    USR_PRINT(dest, "The function '%s' is declared here", dest->name);
-    USR_STOP();
-  }
-}
-
-//
-// Performs both implementForallIntents1 and implementForallIntents2.
-// 'parCall' must have already been resolved.
-//
-void implementForallIntentsNew(ForallStmt* fs, CallExpr* parCall)
+static void collectAndResolveImplicitShadowVars(ForallStmt* fs)
 {
-  INT_ASSERT(parCall == fs->firstIteratedExpr());
+  if (!fs->needToHandleOuterVars())  // no shadow vars, please
+    return;
 
-  implementForallIntents1New(fs, parCall);
+  SET_LINENO(fs);
+  SymbolMap outer2shadow;
 
-  checkForNonIterator(parCall);
+  // These are the additional blocks to look into for outer/shadow variables.
+  // This is specific to the start-of-resolution-of-ForallStmt point,
+  // where most initBlock() and deinitBlock() are irrelevant/empty.
+  for_shadow_vars(svar, temp, fs)
+    if (svar->isTaskPrivate())
+      if (BlockStmt* initB = svar->initBlock())
+        if (!initB->body.empty())
+          doImplicitShadowVars(fs, initB, outer2shadow);
+
+  // The bulk of the work is the loop body.
+  doImplicitShadowVars(fs, fs->loopBody(), outer2shadow);
+}
+
+static Type* ovarOrSvarType(ShadowVarSymbol* svar) {
+  if (Symbol* ovar = svar->outerVarSym())
+    return ovar->type;
+  else
+    return svar->type;
+}
+
+static void removeUsesOfShadowVar(ShadowVarSymbol* svar) {
+  // Substitute its uses with the outer var.
+  Symbol* ovar = svar->outerVarSym();
+  for_SymbolSymExprs(se, svar)
+    se->setSymbol(ovar);
+
+  // Remove it from the tree.
+  svar->defPoint->remove();
+}
+
+static void resolveAndPruneExplicitShadowVars(ForallStmt* fs,
+                                              Expr* lastExplicitSVarDef)
+{
+  if (lastExplicitSVarDef == NULL)
+    return;  // there were no explicit shadow vars
+
+  for_shadow_vars_and_defs(svar, svdef, temp, fs)
+  {
+    Type* type  = ovarOrSvarType(svar);
+    bool  prune = false;
+    resolveShadowVarTypeIntent(type, svar->intent, prune); // updates the args
+
+    if (prune) {
+      removeUsesOfShadowVar(svar);
+    }
+    else {
+      SET_LINENO(svar);
+      svar->type = type;
+      handleOneShadowVar(fs, svar);
+    }
+
+    if (svdef == lastExplicitSVarDef) {
+      return; // we have processed implicit shadow vars elsewhere
+    }
+  }
+}
+
+/////////////////////////////////////////////////////////////////////////////
+
+void setupAndResolveShadowVars(ForallStmt* fs)
+{
+  // Remember the last explicit shadow variable on the list, so that
+  // resolveAndPruneExplicitShadowVars() stops there and does not deal
+  // with the ones added by collectAndResolveImplicitShadowVars().
+  Expr* lastExplicitSVarDef = fs->shadowVariables().tail;
+
+  //
+  // Detect, create, set up and resolve implicit shadow vars.
+  // Add them to fs->shadowVariables() and substitute them
+  // for the outer vars in the loop body.
+  //
+  collectAndResolveImplicitShadowVars(fs);
+
+  //
+  // Resolve the explicit shadow variables i.e. the ones that 
+  // the user wrote explicitly in the with-clause.
+  // Remove the ones we want to prune.
+  //
+  // Note: collectAndResolveImplicitShadowVars() needs to go earlier so that
+  // it does not come across the explicit shadow vars that have been pruned.
+  //
+  resolveAndPruneExplicitShadowVars(fs, lastExplicitSVarDef);
 }

@@ -112,20 +112,6 @@ void collectSymExprs(BaseAST* ast, std::vector<SymExpr*>& symExprs) {
     symExprs.push_back(symExpr);
 }
 
-static void collectMySymExprsHelp(BaseAST*               ast,
-                                  std::vector<SymExpr*>& symExprs) {
-  if (isSymbol(ast)) return; // do not descend into nested symbols
-  AST_CHILDREN_CALL(ast, collectMySymExprsHelp, symExprs);
-  if (SymExpr* se = toSymExpr(ast))
-    symExprs.push_back(se);
-}
-
-// The same for std::vector.
-void collectMySymExprs(Symbol* me, std::vector<SymExpr*>& symExprs) {
-  // skip the isSymbol(ast) check in collectMySymExprsHelp()
-  AST_CHILDREN_CALL(me, collectMySymExprsHelp, symExprs);
-}
-
 void collectSymbols(BaseAST* ast, std::vector<Symbol*>& symbols) {
   AST_CHILDREN_CALL(ast, collectSymbols, symbols);
   if (Symbol* symbol = toSymbol(ast))
@@ -686,13 +672,10 @@ bool isTypeExpr(Expr* expr) {
     } else if (call->isPrimitive(PRIM_GET_MEMBER_VALUE) == true ||
                call->isPrimitive(PRIM_GET_MEMBER)       == true) {
       SymExpr*       left = toSymExpr(call->get(1));
-      AggregateType* ct   = toAggregateType(left->typeInfo());
+      Type*          t    = canonicalClassType(left->getValType());
+      AggregateType* ct   = toAggregateType(t);
 
       INT_ASSERT(ct != NULL);
-
-      if (ct->symbol->hasFlag(FLAG_REF) == true) {
-        ct = toAggregateType(ct->getValType());
-      }
 
       if (left->symbol()->type->symbol->hasFlag(FLAG_TUPLE) == true &&
           left->symbol()->hasFlag(FLAG_TYPE_VARIABLE)       == true) {
@@ -782,7 +765,6 @@ static void
 visitVisibleFunctions(Vec<FnSymbol*>& fns, Vec<TypeSymbol*>& types)
 {
   // chpl_gen_main is always visible (if it exists).
-  // --ipe does not build chpl_gen_main
   if (chpl_gen_main)
     pruneVisit(chpl_gen_main, fns, types);
 

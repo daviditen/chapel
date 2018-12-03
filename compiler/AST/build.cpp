@@ -25,6 +25,7 @@
 #include "CatchStmt.h"
 #include "config.h"
 #include "DeferStmt.h"
+#include "docsDriver.h"
 #include "driver.h"
 #include "files.h"
 #include "ForLoop.h"
@@ -143,12 +144,6 @@ static void addPragmaFlags(Symbol* sym, Vec<const char*>* pragmas) {
           USR_WARN(fn, "function's return type is not a value type.  Ignoring.");
         }
         fn->retTag = RET_TYPE;
-      } else if (flag == FLAG_USE_DEFAULT_INIT) {
-        AggregateType* at = toAggregateType(sym->type);
-        if (!isTypeSymbol(sym) || at == NULL) {
-          USR_FATAL_CONT(sym, "cannot apply 'use default init' to symbol '%s',"
-                         " not a class or record definition", sym->name);
-        }
       }
     }
   }
@@ -259,18 +254,34 @@ Expr* buildFormalArrayType(Expr* iterator, Expr* eltType, Expr* index) {
   }
 }
 
-Expr* buildIntLiteral(const char* pch) {
+Expr* buildIntLiteral(const char* pch, const char* file, int line) {
   uint64_t ull;
+  int len = strlen(pch);
+  char* noUnderscores = (char*)malloc(len+1);
+
+  // remove all underscores from the number
+  int j = 0;
+  for (int i=0; i<len; i++) {
+    if (pch[i] != '_') {
+      noUnderscores[j++] = pch[i];
+    }
+  }
+  noUnderscores[j] = '\0';
+
   if (!strncmp("0b", pch, 2) || !strncmp("0B", pch, 2))
-    ull = binStr2uint64(pch);
+    ull = binStr2uint64(noUnderscores, true, file, line);
   else if (!strncmp("0o", pch, 2) || !strncmp("0O", pch, 2))
     // The second case is difficult to read, but is zero followed by a capital
     // letter 'o'
-    ull = octStr2uint64(pch);
+    ull = octStr2uint64(noUnderscores, true, file, line);
   else if (!strncmp("0x", pch, 2) || !strncmp("0X", pch, 2))
-    ull = hexStr2uint64(pch);
-  else
-    ull = str2uint64(pch);
+    ull = hexStr2uint64(noUnderscores, true, file, line);
+  else {
+    ull = str2uint64(noUnderscores, true, file, line);
+  }
+
+  free(noUnderscores);
+
   if (ull <= 9223372036854775807ull)
     return new SymExpr(new_IntSymbol(ull, INT_SIZE_64));
   else
@@ -648,7 +659,26 @@ buildIfStmt(Expr* condExpr, Expr* thenExpr, Expr* elseExpr) {
 
 BlockStmt*
 buildExternBlockStmt(const char* c_code) {
-  return buildChapelStmt(new ExternBlockStmt(c_code));
+  BlockStmt* ret = NULL;
+  ret = buildChapelStmt(new ExternBlockStmt(c_code));
+
+  // Check that the compiler supports extern blocks
+  // but skip these checks for chpldoc.
+  if (fDocs == false) {
+#ifdef HAVE_LLVM
+    // Chapel was built with LLVM
+    // Just bring up an error if extern blocks are disabled
+    if (externC == false)
+      USR_FATAL(ret, "extern block syntax is turned off. Use "
+                     "--extern-c flag to turn on.");
+#else
+    // If Chapel wasn't built with LLVM, we can't handle extern blocks
+    USR_FATAL(ret, "Chapel must be built with llvm in order to "
+                    "use the extern block syntax");
+#endif
+  }
+
+  return ret;
 }
 
 ModuleSymbol* buildModule(const char* name,
@@ -785,13 +815,13 @@ destructureIndices(BlockStmt* block,
 Expr*
 buildForLoopExpr(Expr* indices, Expr* iteratorExpr, Expr* expr, Expr* cond, bool maybeArrayType, bool zippered) {
   if (zippered) zipToTuple(iteratorExpr);
-  return new LoopExpr(indices, iteratorExpr, expr, cond, maybeArrayType, zippered, /*forall=*/ false);
+  return new LoopExpr(indices, iteratorExpr, cond, expr, /*forall=*/ false, zippered, maybeArrayType);
 }
 
 Expr*
 buildForallLoopExpr(Expr* indices, Expr* iteratorExpr, Expr* expr, Expr* cond, bool maybeArrayType, bool zippered) {
   if (zippered) zipToTuple(iteratorExpr);
-  return new LoopExpr(indices, iteratorExpr, expr, cond, maybeArrayType, zippered, /*forall=*/true);
+  return new LoopExpr(indices, iteratorExpr, cond, expr, /*forall=*/ true, zippered, maybeArrayType);
 }
 
 //
@@ -804,10 +834,7 @@ Expr* buildForallLoopExprFromArrayType(CallExpr* buildArrTypeCall,
                                            bool recursiveCall) {
   // Is this a call to chpl__buildArrayRuntimeType?
   UnresolvedSymExpr* ursym = toUnresolvedSymExpr(buildArrTypeCall->baseExpr);
-  if (!ursym) {
-    INT_FATAL("Unexpected CallExpr format in buildForallLoopExprFromArrayType");
-  }
-  if (strcmp(ursym->unresolved, "chpl__buildArrayRuntimeType") == 0) {
+  if (ursym && strcmp(ursym->unresolved, "chpl__buildArrayRuntimeType") == 0) {
     // If so, let's process it...
 
     // [i in 1..10] <type expr using 'i'>;
@@ -893,6 +920,15 @@ static CallExpr* makeUnmanagedNew(Expr* typeArg, Expr* arg) {
                                       new SymExpr(dtUnmanaged->symbol))));
 }
 
+static void adjustMinMaxReduceOp(Expr* reduceOp) {
+  if (UnresolvedSymExpr* sym = toUnresolvedSymExpr(reduceOp)) {
+    if (!strcmp(sym->unresolved, "max"))
+      sym->unresolved = astr("MaxReduceScanOp");
+    else if (!strcmp(sym->unresolved, "min"))
+      sym->unresolved = astr("MinReduceScanOp");
+  }
+}
+
 // Do whatever is needed for a reduce intent.
 // Return the globalOp symbol.
 static void setupOneReduceIntent(VarSymbol* iterRec, BlockStmt* parLoop,
@@ -901,13 +937,7 @@ static void setupOneReduceIntent(VarSymbol* iterRec, BlockStmt* parLoop,
 {
   Expr* reduceOp = reduceOpRef;  // save away these
   Expr* otherROp = otherROpRef;
-
-  if (UnresolvedSymExpr* sym = toUnresolvedSymExpr(reduceOp)) {
-    if (!strcmp(sym->unresolved, "max"))
-      sym->unresolved = astr("MaxReduceScanOp");
-    else if (!strcmp(sym->unresolved, "min"))
-      sym->unresolved = astr("MinReduceScanOp");
-  }
+  adjustMinMaxReduceOp(reduceOp);
 
   VarSymbol* globalOp;
   if (useThisGlobalOp) {
@@ -1208,6 +1238,7 @@ void addTaskIntent(CallExpr* ti, ShadowVarSymbol* svar) {
   Expr* ovar = new UnresolvedSymExpr(svar->name);
   if (Expr* ri = svar->reduceOpExpr()) {
     // This is a reduce intent. NB 'intent' is undefined.
+    adjustMinMaxReduceOp(ri);
     ti->insertAtTail(ri);
     ti->insertAtTail(ovar);
   } else {
@@ -1255,6 +1286,7 @@ static BlockStmt* buildLoweredCoforall(Expr* indices,
   taskBlk->insertAtHead(body);
 
   VarSymbol* coforallCount = newTempConst("_coforallCount");
+  coforallCount->addFlag(FLAG_END_COUNT);
   VarSymbol* numTasks = newTemp("numTasks");
   VarSymbol* useLocalEndCount = gTrue;
   VarSymbol* countRunningTasks = gTrue;
@@ -1359,6 +1391,7 @@ BlockStmt* buildCoforallLoopStmt(Expr* indices,
   VarSymbol* tmpIter = newTemp("tmpIter");
   tmpIter->addFlag(FLAG_EXPR_TEMP);
   tmpIter->addFlag(FLAG_MAYBE_REF);
+  tmpIter->addFlag(FLAG_NO_COPY);
 
   BlockStmt* coforallBlk = new BlockStmt();
   coforallBlk->insertAtTail(new DefExpr(tmpIter));
@@ -1515,10 +1548,10 @@ static void adjustEltTypeFE(FnSymbol* fn, Symbol* eltType, LoopExpr* fe)
   FnSymbol* typef = new FnSymbol(astr(fn->name, "_eltype"));
   typef->retTag = RET_TYPE;
   destructureIndices(typef->body, fe->indices, iterIndex, false);
-  BlockStmt* expr = fe->expr;
-  Expr* lastExpr = expr->body.tail->remove();
-  expr->insertAtTail(new_Expr("'return'('typeof'(%E))", lastExpr));
-  typef->insertAtTail(expr);
+  BlockStmt* loopBody = fe->loopBody;
+  Expr* lastExpr = loopBody->body.tail->remove();
+  loopBody->insertAtTail(new_Expr("'return'('typeof'(%E))", lastExpr));
+  typef->insertAtTail(loopBody);
 
   // Do not delete the enclosing block in removeTypeBlocks().
   typeBlock->blockTag = BLOCK_SCOPELESS;
@@ -1686,7 +1719,7 @@ buildReduceViaForall(FnSymbol* fn, Expr* opExpr, Expr* dataExpr,
     data->name = astr("chpl_FE_iter");
     dataExpr = dataFE->iteratorExpr;
     index = dataFE->indices;
-    elementToReduce = dataFE->expr;
+    elementToReduce = dataFE->loopBody ;
     // NB do not look at dataFE->indices, dataFE->expr, etc. from here on.
   } else {
     index  = new UnresolvedSymExpr("chpl_reduceIndexVar");
@@ -1738,13 +1771,7 @@ buildReduceViaForall(FnSymbol* fn, Expr* opExpr, Expr* dataExpr,
 static void
 buildReduceScanPreface1(FnSymbol* fn, Symbol* data, Symbol* eltType,
                        Expr* opExpr, Expr* dataExpr, bool zippered=false) {
-  if (UnresolvedSymExpr* sym = toUnresolvedSymExpr(opExpr)) {
-    if (!strcmp(sym->unresolved, "max"))
-      sym->unresolved = astr("MaxReduceScanOp");
-    else if (!strcmp(sym->unresolved, "min"))
-      sym->unresolved = astr("MinReduceScanOp");
-  }
-
+  adjustMinMaxReduceOp(opExpr);
   eltType->addFlag(FLAG_MAYBE_TYPE);
   fn->insertAtTail(new DefExpr(eltType));
 
@@ -2006,6 +2033,28 @@ BlockStmt* buildVarDecls(BlockStmt* stmts, std::set<Flag> flags, const char* doc
   return stmts;
 }
 
+static
+AggregateType* installInternalType(AggregateType* ct, AggregateType* dt) {
+  // Hook the string type in the modules
+  // to avoid duplication with dtString created in initPrimitiveTypes().
+  // gatherWellKnownTypes runs too late to help.
+
+  // grab the existing symbol from the placeholder "dtString"
+  ct->addSymbol(dt->symbol);
+  *dt = *ct;
+
+  // These fields get overwritten with `ct` by the assignment.
+  // These fields are set to `this` by the AggregateType constructor
+  // so they should still be `dtString`. Fix them back up.
+  dt->fields.parent   = dt;
+  dt->inherits.parent = dt;
+
+  gAggregateTypes.remove(gAggregateTypes.index(ct));
+
+  delete ct;
+
+  return dt;
+}
 
 DefExpr* buildClassDefExpr(const char*  name,
                            const char*  cname,
@@ -2014,30 +2063,26 @@ DefExpr* buildClassDefExpr(const char*  name,
                            BlockStmt*   decls,
                            Flag         isExtern,
                            const char*  docs) {
-  AggregateType* ct = new AggregateType(tag);
+  AggregateType* ct = NULL;
+  TypeSymbol* ts = NULL;
+
+  ct = new AggregateType(tag);
 
   // Hook the string type in the modules
   // to avoid duplication with dtString created in initPrimitiveTypes().
   // gatherWellKnownTypes runs too late to help.
-  if (strcmp("string", name) == 0) {
-    *dtString = *ct;
-
-    // These fields get overwritten with `ct` by the assignment.
-    // These fields are set to `this` by the AggregateType constructor
-    // so they should still be `dtString`. Fix them back up.
-    dtString->fields.parent   = dtString;
-    dtString->inherits.parent = dtString;
-
-    gAggregateTypes.remove(gAggregateTypes.index(ct));
-
-    delete ct;
-
-    ct = dtString;
+  if (strcmp("_string", name) == 0) {
+    ct = installInternalType(ct, dtString);
+    ts = ct->symbol;
+  } else if (strcmp("_locale", name) == 0) {
+    ct = installInternalType(ct, dtLocale);
+    ts = ct->symbol;
+  } else {
+    ts = new TypeSymbol(name, ct);
   }
 
   INT_ASSERT(ct);
 
-  TypeSymbol* ts  = new TypeSymbol(name, ct);
   DefExpr*    def = new DefExpr(ts);
 
   ct->addDeclarations(decls);
@@ -2170,6 +2215,41 @@ FnSymbol* buildLambda(FnSymbol *fn) {
   return fn;
 }
 
+// Creates a dummy function that accumulates flags & cname
+FnSymbol* buildLinkageFn(Flag externOrExport, Expr* paramCNameExpr) {
+
+  const char* cname = "";
+  // Look for a string literal we can use
+  if (paramCNameExpr != NULL)
+    if (SymExpr* se = toSymExpr(paramCNameExpr))
+      if (VarSymbol* v = toVarSymbol(se->symbol()))
+        if (v->isImmediate())
+          if (v->immediate->const_kind == CONST_KIND_STRING)
+            cname = v->immediate->v_string;
+
+  FnSymbol* ret = new FnSymbol(cname);
+
+  if (externOrExport == FLAG_EXTERN) {
+    ret->addFlag(FLAG_LOCAL_ARGS);
+    ret->addFlag(FLAG_EXTERN);
+  }
+  if (externOrExport == FLAG_EXPORT) {
+    ret->addFlag(FLAG_LOCAL_ARGS);
+    ret->addFlag(FLAG_EXPORT);
+  }
+
+  // Handle non-trivial param names that need to be resolved,
+  // but don't do this under chpldoc
+  if (paramCNameExpr && cname[0] == '\0' && fDocs == false) {
+    DefExpr* argDef = buildArgDefExpr(INTENT_BLANK,
+                                      astr_chpl_cname,
+                                      new SymExpr(dtString->symbol),
+                                      paramCNameExpr, NULL);
+    ret->insertFormalAtTail(argDef);
+  }
+
+  return ret;
+}
 
 // Replaces the dummy function name "_" with the real name, sets the 'this'
 // intent tag. For methods, it also adds a method tag and "this" declaration.
@@ -2245,8 +2325,8 @@ buildFunctionDecl(FnSymbol*   fn,
 
   if (optWhere)
   {
-    if (fn->hasFlag(FLAG_EXTERN))
-      USR_FATAL_CONT(fn, "Extern functions cannot have where clauses.");
+    if (fn->hasFlag(FLAG_EXPORT))
+      USR_FATAL_CONT(fn, "Exported functions cannot have where clauses.");
 
     fn->where = new BlockStmt(optWhere);
   }
@@ -2315,13 +2395,14 @@ DefExpr* buildForwardingExprFnDef(Expr* expr) {
   // This way, we can work with the rest of the compiler that
   // assumes that 'this' is an ArgSymbol.
   static int delegate_counter = 0;
-  const char* name = astr("forwarding_expr", istr(++delegate_counter));
+  const char* name = astr("chpl_forwarding_expr", istr(++delegate_counter));
   if (UnresolvedSymExpr* usex = toUnresolvedSymExpr(expr))
     name = astr(name, "_", usex->unresolved);
   FnSymbol* fn = new FnSymbol(name);
 
   fn->addFlag(FLAG_INLINE);
   fn->addFlag(FLAG_MAYBE_REF);
+  fn->addFlag(FLAG_REF_TO_CONST_WHEN_CONST_THIS);
   fn->addFlag(FLAG_COMPILER_GENERATED);
 
   fn->body->insertAtTail(new CallExpr(PRIM_RETURN, expr));
@@ -2585,6 +2666,7 @@ buildBeginStmt(CallExpr* byref_vars, Expr* stmt) {
   } else {
     BlockStmt* block = buildChapelStmt();
     VarSymbol* endCount = newTempConst("_endCount");
+    endCount->addFlag(FLAG_END_COUNT);
     block->insertAtTail(new DefExpr(endCount));
     block->insertAtTail(new CallExpr(PRIM_MOVE, endCount, new CallExpr(PRIM_GET_DYNAMIC_END_COUNT)));
     block->insertAtTail(new CallExpr("_upEndCount", endCount));
@@ -2604,9 +2686,11 @@ buildSyncStmt(Expr* stmt) {
   checkControlFlow(stmt, "sync statement");
   BlockStmt* block = new BlockStmt();
   VarSymbol* endCountSave = newTempConst("_endCountSave");
+  endCountSave->addFlag(FLAG_END_COUNT);
   block->insertAtTail(new DefExpr(endCountSave));
   block->insertAtTail(new CallExpr(PRIM_MOVE, endCountSave, new CallExpr(PRIM_GET_DYNAMIC_END_COUNT)));
   VarSymbol* endCount = newTempConst("_endCount");
+  endCount->addFlag(FLAG_END_COUNT);
   block->insertAtTail(new DefExpr(endCount));
   block->insertAtTail(new CallExpr(PRIM_MOVE, endCount, new CallExpr("_endCountAlloc", /* forceLocalTypes= */gFalse)));
   block->insertAtTail(new CallExpr(PRIM_SET_DYNAMIC_END_COUNT, endCount));
@@ -2640,7 +2724,8 @@ buildSyncStmt(Expr* stmt) {
   BlockStmt* body = toBlockStmt(stmt);
   INT_ASSERT(body);
 
-  TryStmt* t = new TryStmt(/* try! */ false, body, catches);
+  TryStmt* t = new TryStmt(/* try! */ false, body, catches,
+                           /* isSyncTry */ true);
 
   block->insertAtTail(t);
 
@@ -2677,7 +2762,7 @@ buildCobeginStmt(CallExpr* byref_vars, BlockStmt* block) {
   }
 
   VarSymbol* cobeginCount = newTempConst("_cobeginCount");
-
+  cobeginCount->addFlag(FLAG_END_COUNT);
   VarSymbol* numTasks = new_IntSymbol(block->length());
 
   for_alist(stmt, block->body) {
@@ -2867,4 +2952,16 @@ Expr* convertAssignmentAndWarn(Expr* a, const char* op, Expr* b)
 
   // Either way, continue compiling with ==
   return new CallExpr("==", a, b);
+}
+
+void redefiningReservedTypeError(const char* name)
+{
+  USR_FATAL_CONT(buildErrorStandin(),
+                 "attempt to redefine reserved type '%s'", name);
+}
+
+void redefiningReservedWordError(const char* name)
+{
+  USR_FATAL_CONT(buildErrorStandin(),
+                 "attempt to redefine reserved word '%s'", name);
 }

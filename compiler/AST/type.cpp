@@ -31,7 +31,6 @@
 #include "expr.h"
 #include "files.h"
 #include "intlimits.h"
-#include "ipe.h"
 #include "iterator.h"
 #include "misc.h"
 #include "passes.h"
@@ -46,7 +45,6 @@ static bool isDerivedType(Type* type, Flag flag);
 Type::Type(AstTag astTag, Symbol* iDefaultVal) : BaseAST(astTag) {
   symbol              = NULL;
   refType             = NULL;
-  hasGenericDefaults  = false;
   defaultValue        = iDefaultVal;
   destructor          = NULL;
   isInternalType      = false;
@@ -379,6 +377,30 @@ void EnumType::replaceChild(BaseAST* old_ast, BaseAST* new_ast) {
 }
 
 
+bool EnumType::isAbstract() {
+  for_enums(constant, this) {
+    if (constant->init) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool EnumType::isConcrete() {
+  // if the first constant has an initializer, it's concrete;
+  // otherwise, it's not.  This loop with a guaranteed return is a
+  // lazy way of getting that first constant.
+  for_enums(constant, this) {
+    if (constant->init) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+
 PrimitiveType* EnumType::getIntegerType() {
   INT_ASSERT(integerType);
   return integerType;
@@ -507,6 +529,10 @@ void initPrimitiveTypes() {
   dtStringC                            = createPrimitiveType("c_string", "c_string" );
 
   dtString                             = new AggregateType(AGGREGATE_RECORD);
+  dtString->symbol                     = new TypeSymbol("string", dtString);
+
+  dtLocale                             = new AggregateType(AGGREGATE_RECORD);
+  dtLocale->symbol                     = new TypeSymbol("locale", dtLocale);
 
   gFalse                               = createSymbol(dtBools[BOOL_SIZE_SYS], "false");
   gTrue                                = createSymbol(dtBools[BOOL_SIZE_SYS], "true");
@@ -520,13 +546,6 @@ void initPrimitiveTypes() {
   gTrue->immediate->v_bool             = true;
   gTrue->immediate->const_kind         = NUM_KIND_BOOL;
   gTrue->immediate->num_index          = BOOL_SIZE_SYS;
-
-  //
-  // Mark the "high water mark" for types that IPE relies on directly
-  //
-  if (fUseIPE == true) {
-    ipeRootInit();
-  }
 
   dtBools[BOOL_SIZE_SYS]->defaultValue = gFalse;
   dtInt[INT_SIZE_64]->defaultValue     = new_IntSymbol(0, INT_SIZE_64);
@@ -594,8 +613,6 @@ void initPrimitiveTypes() {
   gCVoidPtr->cname = "NULL";
   gCVoidPtr->addFlag(FLAG_EXTERN);
 
-  dtSymbol = createPrimitiveType( "symbol", "_symbol");
-
   dtFile = createPrimitiveType ("_file", "_cfile");
   dtFile->symbol->addFlag(FLAG_EXTERN);
 
@@ -626,11 +643,24 @@ void initPrimitiveTypes() {
   dtAny = createInternalType ("_any", "_any");
   dtAny->symbol->addFlag(FLAG_GENERIC);
 
-  dtIntegral = createInternalType ("integral", "integral");
-  dtIntegral->symbol->addFlag(FLAG_GENERIC);
+  dtAnyBool = createInternalType("chpl_anybool", "bool");
+  dtAnyBool->symbol->addFlag(FLAG_GENERIC);
 
   dtAnyComplex = createInternalType("chpl_anycomplex", "complex");
   dtAnyComplex->symbol->addFlag(FLAG_GENERIC);
+
+  dtAnyEnumerated = createInternalType ("enumerated", "enumerated");
+  dtAnyEnumerated->symbol->addFlag(FLAG_GENERIC);
+
+  dtAnyImag = createInternalType("chpl_anyimag", "imag");
+  dtAnyImag->symbol->addFlag(FLAG_GENERIC);
+
+  dtAnyReal = createInternalType("chpl_anyreal", "real");
+  dtAnyReal->symbol->addFlag(FLAG_GENERIC);
+
+  // could also be called dtAnyIntegral
+  dtIntegral = createInternalType ("integral", "integral");
+  dtIntegral->symbol->addFlag(FLAG_GENERIC);
 
   dtNumeric = createInternalType ("numeric", "numeric");
   dtNumeric->symbol->addFlag(FLAG_GENERIC);
@@ -658,9 +688,6 @@ void initPrimitiveTypes() {
   dtModuleToken = createInternalType("tmodule=", "tmodule=");
 
   CREATE_DEFAULT_SYMBOL(dtModuleToken, gModuleToken, "module=");
-
-  dtAnyEnumerated = createInternalType ("enumerated", "enumerated");
-  dtAnyEnumerated->symbol->addFlag(FLAG_GENERIC);
 }
 
 static PrimitiveType* createPrimitiveType(const char* name, const char* cname) {
@@ -1009,6 +1036,18 @@ bool isManagedPtrType(const Type* t) {
   return t && t->symbol->hasFlag(FLAG_MANAGED_POINTER);
 }
 
+Type* getManagedPtrBorrowType(const Type* t) {
+  INT_ASSERT(isManagedPtrType(t));
+
+  const AggregateType* at = toConstAggregateType(t);
+
+  INT_ASSERT(at);
+
+  Type* ret = at->getField("chpl_t")->type;
+  Type* borrow = canonicalClassType(ret);
+  return borrow;
+}
+
 bool isSyncType(const Type* t) {
   return t->symbol->hasFlag(FLAG_SYNC);
 }
@@ -1109,13 +1148,7 @@ bool isArrayClass(Type* type) {
 }
 
 bool isString(Type* type) {
-  bool retval = false;
-
-  if (AggregateType* aggr = toAggregateType(type)) {
-    retval = strcmp(aggr->symbol->name, "string") == 0;
-  }
-
-  return retval;
+  return type == dtString;
 }
 
 //
@@ -1320,7 +1353,7 @@ bool isNonGenericClassWithInitializers(Type* type) {
 
   if (isNonGenericClass(type) == true) {
     if (AggregateType* at = toAggregateType(type)) {
-      if (at->initializerStyle == DEFINES_INITIALIZER) {
+      if (at->hasUserDefinedInit == true) {
         retval = true;
       } else if (at->wantsDefaultInitializer()) {
         retval = true;
@@ -1350,7 +1383,7 @@ bool isGenericClassWithInitializers(Type* type) {
 
   if (isGenericClass(type) == true) {
     if (AggregateType* at = toAggregateType(type)) {
-      if (at->initializerStyle == DEFINES_INITIALIZER) {
+      if (at->hasUserDefinedInit == true) {
         retval = true;
       } else if (at->wantsDefaultInitializer()) {
         retval = true;
@@ -1367,7 +1400,7 @@ bool isClassWithInitializers(Type* type) {
   if (AggregateType* at = toAggregateType(type)) {
     if (at->isClass()                    == true  &&
         at->symbol->hasFlag(FLAG_EXTERN) == false &&
-        (at->initializerStyle == DEFINES_INITIALIZER ||
+        (at->hasUserDefinedInit == true ||
          at->wantsDefaultInitializer())) {
       retval = true;
     }
@@ -1395,7 +1428,7 @@ bool isNonGenericRecordWithInitializers(Type* type) {
 
   if (isNonGenericRecord(type) == true) {
     if (AggregateType* at = toAggregateType(type)) {
-      if (at->initializerStyle == DEFINES_INITIALIZER) {
+      if (at->hasUserDefinedInit == true) {
         retval = true;
       } else if (at->wantsDefaultInitializer()) {
         retval = true;
@@ -1425,7 +1458,7 @@ bool isGenericRecordWithInitializers(Type* type) {
 
   if (isGenericRecord(type) == true) {
     if (AggregateType* at = toAggregateType(type)) {
-      if (at->initializerStyle == DEFINES_INITIALIZER) {
+      if (at->hasUserDefinedInit == true) {
         retval = true;
       } else if (at->wantsDefaultInitializer()) {
         retval = true;
@@ -1441,8 +1474,7 @@ bool isRecordWithInitializers(Type* type) {
 
   if (AggregateType* at = toAggregateType(type)) {
     if (at->isRecord()                   == true  &&
-        at->symbol->hasFlag(FLAG_EXTERN) == false &&
-        (at->initializerStyle == DEFINES_INITIALIZER ||
+        (at->hasUserDefinedInit == true ||
          at->wantsDefaultInitializer())) {
       retval = true;
     }

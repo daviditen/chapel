@@ -33,7 +33,7 @@ CHPL_HOME
 
     .. code-block:: sh
 
-        export CHPL_HOME=~/chapel-1.17.1
+        export CHPL_HOME=~/chapel-1.18.0
 
    .. note::
      This, and all other examples in the Chapel documentation, assumes you're
@@ -68,10 +68,8 @@ CHPL_HOST_PLATFORM
         darwin       Macintosh OS X platforms
         linux32      32-bit Linux platforms
         linux64      64-bit Linux platforms
-        marenostrum  BSC's MareNostrum platform
         netbsd32     32-bit NetBSD platforms
         netbsd64     64-bit NetBSD platforms
-        pwr5         IBM Power5 SMP cluster
         pwr6         IBM Power6 SMP cluster
         sunos        SunOS platforms
         cray-cs      Cray CS\ |trade|
@@ -141,20 +139,22 @@ CHPL_*_COMPILER
    and generated code for ``CHPL_TARGET_PLATFORM``.  Currently supported values
    are as follows:
 
-        =================  ===================================================
-        Value              Description
-        =================  ===================================================
-        clang              The Clang compiler suite -- clang and clang++
-        clang-included     The Clang compiler in third-party/llvm
-        cray-prgenv-cray   The Cray PrgEnv compiler using the Cray CCE backend
-        cray-prgenv-gnu    The Cray PrgEnv compiler using the GNU backend
-        cray-prgenv-intel  The Cray PrgEnv compiler using the Intel backend
-        cray-prgenv-pgi    The Cray PrgEnv compiler using the PGI backend
-        gnu                The GNU compiler suite -- gcc and g++
-        ibm                The IBM compiler suite -- xlc and xlC
-        intel              The Intel compiler suite -- icc and icpc
-        pgi                The PGI compiler suite -- pgcc and pgc++
-        =================  ===================================================
+        =================== ===================================================
+        Value               Description
+        =================== ===================================================
+        allinea             The Allinea ARM compiler suite -- clang and clang++
+        clang               The Clang compiler suite -- clang and clang++
+        clang-included      The Clang compiler in third-party/llvm
+        cray-prgenv-allinea The Cray PrgEnv compiler using the Allinea backend
+        cray-prgenv-cray    The Cray PrgEnv compiler using the Cray CCE backend
+        cray-prgenv-gnu     The Cray PrgEnv compiler using the GNU backend
+        cray-prgenv-intel   The Cray PrgEnv compiler using the Intel backend
+        cray-prgenv-pgi     The Cray PrgEnv compiler using the PGI backend
+        gnu                 The GNU compiler suite -- gcc and g++
+        ibm                 The IBM compiler suite -- xlc and xlC
+        intel               The Intel compiler suite -- icc and icpc
+        pgi                 The PGI compiler suite -- pgcc and pgc++
+        =================== ===================================================
 
    The default for ``CHPL_*_COMPILER`` depends on the value of the corresponding
    ``CHPL_*_PLATFORM`` environment variable:
@@ -166,8 +166,7 @@ CHPL_*_COMPILER
                       - cray-prgenv-$PE_ENV (for ``CHPL_TARGET_COMPILER``,
                         where PE_ENV is set by PrgEnv-* modules)
         darwin        clang if available, otherwise gnu
-        marenostrum   ibm
-        pwr5, pwr6    ibm
+        pwr6          ibm
         other         gnu
         ============  ==================================================
 
@@ -201,21 +200,24 @@ CHPL_TARGET_ARCH
 
         **Architecture-specific values**
 
-        =========== ================
-        intel       amd
-        =========== ================
-        core2           k8
-        nehalem         k8sse3
-        westmere        barcelona
+        =========== ================ ================
+        intel       amd              arm
+        =========== ================ ================
+        core2           k8           aarch64
+        nehalem         k8sse3       thunderx
+        westmere        barcelona    thunderx2t99
         sandybridge     bdver1
         ivybridge       bdver2
         haswell         bdver3
         broadwell       bdver4
-        =========== ================
+        skylake
+        knl
+        =========== ================ ================
 
-   These values are defined to be the same as in GCC 4.9:
+   These values are defined to be the same as in GCC 7:
 
-        https://gcc.gnu.org/onlinedocs/gcc-4.9.0/gcc/i386-and-x86-64-Options.html
+        https://gcc.gnu.org/onlinedocs/gcc-7.3.0/gcc/x86-Options.html
+        https://gcc.gnu.org/onlinedocs/gcc-7.3.0/gcc/AArch64-Options.html
 
    If you do not want ``CHPL_TARGET_ARCH`` to have any effect, you can set it
    to either ``unknown`` or ``none``. Both will disable specialization, but the
@@ -414,8 +416,8 @@ CHPL_ATOMICS
                      standard atomics (from C11)
         intrinsics   implement atomics using target compiler intrinsics
                      (which typically map down to hardware capabilities)
-        locks        implement atomics by using Chapel sync variables to
-                     protect normal operations
+        locks        implement atomics by using mutexes to protect normal
+                     operations
         ===========  =====================================================
 
    If unset, CHPL_ATOMICS defaults to ``intrinsics`` for most configurations.
@@ -657,6 +659,24 @@ CHPL_UNWIND
        ========= =======================================================
 
    If unset, ``CHPL_UNWIND`` defaults to ``none``
+
+.. _readme-chplenv.CHPL_LIB_PIC:
+
+CHPL_LIB_PIC
+~~~~~~~~~~~~
+   Optionally, the ``CHPL_LIB_PIC`` environment variable can be used to build
+   position independent or position dependent code.  This is intended for use
+   when :ref:`readme-libraries`, especially when :ref:`readme-libraries.Python`
+   or when building with ``--dynamic``. Current options are:
+
+       ===== ================================
+       Value Description
+       ===== ================================
+       pic   build position independent code
+       none  build position dependent code
+       ===== ================================
+
+   If unset, ``CHPL_LIB_PIC`` defaults to ``none``
 
 Compiler Command Line Option Defaults
 -------------------------------------

@@ -1,12 +1,8 @@
 """ Backend compiler utility functions for chplenv modules """
 import os
 import re
-import sys
 
 from collections import namedtuple
-
-chplenv_dir = os.path.dirname(__file__)
-sys.path.insert(0, os.path.abspath(chplenv_dir))
 
 from utils import error, memoize, run_command
 
@@ -19,7 +15,7 @@ def get_compiler_name(compiler):
         return 'aarch64-unknown-linux-gnu-gcc'
     elif 'gnu' in compiler:
         return 'gcc'
-    elif compiler == 'clang':
+    elif compiler in ['clang', 'allinea']:
         return 'clang'
     elif compiler == 'intel':
         return 'icc'

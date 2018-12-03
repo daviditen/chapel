@@ -94,9 +94,8 @@ void checkReturnTypesHaveRefTypes();
 // buildDefaultFunctions.cpp
 void buildDefaultDestructor(AggregateType* ct);
 void buildEnumFunctions(EnumType* et);
-
-// callDestructors.cpp
-void insertReferenceTemps(CallExpr* call);
+FnSymbol* build_accessor(AggregateType* ct, Symbol* field,
+                         bool setter, bool typeMethod);
 
 // createTaskFunctions.cpp -> implementForallIntents.cpp
 extern Symbol* markPruned;
@@ -111,8 +110,18 @@ void deadBlockElimination();
 void flattenNestedFunction(FnSymbol* nestedFunction);
 void flattenNestedFunctions(Vec<FnSymbol*>& nestedFunctions);
 
+// implementForallIntents.cpp
+bool preserveShadowVar(Symbol* var);
+void adjustVoidShadowVariables();
+
 // inlineFunctions.cpp
 BlockStmt* copyFnBodyForInlining(CallExpr* call, FnSymbol* fn, Expr* anchor);
+
+// iterator.cpp
+CallExpr* setIteratorRecordShape(Expr* ref, Symbol* ir, Symbol* shapeSpec,
+                                 bool fromForExpr);
+void setIteratorRecordShape(CallExpr* call);
+bool checkIteratorFromForExpr(Expr* ref, Symbol* shape);
 
 // lowerIterators.cpp, lowerForalls.cpp
 void lowerForallStmtsInline();
@@ -130,6 +139,9 @@ void checkUseBeforeDefs(FnSymbol* fn);
 Type* getOrMakeRefTypeDuringCodegen(Type* type);
 Type* getOrMakeWideTypeDuringCodegen(Type* refType);
 CallExpr* findDownEndCount(FnSymbol* fn);
+
+// resolution
+Expr*     resolveExpr(Expr* expr);
 
 // type.cpp
 void initForTaskIntents();

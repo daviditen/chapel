@@ -7,7 +7,7 @@ class Foo
 
 class Bar : Foo
 {
-  proc doStuff(ref myList : list(int))
+  override proc doStuff(ref myList : list(int))
   {
     writeln("doStuff: myList.length = " + myList.length);
 
@@ -31,7 +31,7 @@ class MyClass
 
   proc run()
   {
-    var bar : Foo = new borrowed Bar();
+    var bar : borrowed Foo = new borrowed Bar();
 
     writeln("run:\t myList.length = " + myList.length);
 

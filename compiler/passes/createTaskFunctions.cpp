@@ -186,9 +186,11 @@ ArgSymbol* tiMarkForForallIntent(ForallIntentTag intent) {
       retval = tiMarkConstRef;
       break;
 
-    case TFI_IN_OUTERVAR:
+    case TFI_IN_PARENT:
     case TFI_REDUCE:
     case TFI_REDUCE_OP:
+    case TFI_REDUCE_PARENT_AS:
+    case TFI_REDUCE_PARENT_OP:
     case TFI_TASK_PRIVATE:
       INT_FATAL("unexpected intent in tiMarkForForallIntent()");
       break;
@@ -340,7 +342,9 @@ static void addReduceIntentSupport(FnSymbol* fn, CallExpr* call,
 
   CallExpr* newOp = new CallExpr(PRIM_NEW,
                                  reduceAt->symbol,
-                                 new NamedExpr("eltType", new SymExpr(eltType)));
+                                 new NamedExpr("eltType", new SymExpr(eltType)),
+                                 new NamedExpr(astr_chpl_manager,
+                                             new SymExpr(dtUnmanaged->symbol)));
   headAnchor->insertBefore(new CallExpr(PRIM_MOVE, globalOp, newOp));
 
   insertInitialAccumulate(headAnchor, globalOp, origSym);
@@ -719,8 +723,9 @@ void createTaskFunctions(void) {
       if( module->hasFlag(FLAG_ATOMIC_MODULE) ) {
         // we could do this with for_alist ... as in getFunctions()
         // instead of creating a copy of the list of functions here.
-        Vec<FnSymbol*> moduleFunctions = module->getTopLevelFunctions(false);
-        forv_Vec(FnSymbol, fnSymbol, moduleFunctions) {
+        std::vector<FnSymbol*> moduleFunctions =
+          module->getTopLevelFunctions(false);
+        for_vector(FnSymbol, fnSymbol, moduleFunctions) {
           ArgSymbol* order = NULL;
           // Does this function have an order= argument?
           // If so, add memory consistency functions (future - if they are not
@@ -744,11 +749,10 @@ void createTaskFunctions(void) {
       // The isLoopStmt() test guards the call blockInfoGet() below
       // from issuing "Migration" warnings.
 
-    } else if (CallExpr* info = block->blockInfoGet()) {
+    } else if (CallExpr* const info = block->blockInfoGet()) {
       SET_LINENO(block);
 
       FnSymbol* fn = NULL;
-      bool isCoforall = false;
 
       if (info->isPrimitive(PRIM_BLOCK_BEGIN)) {
         fn = new FnSymbol("begin_fn");
@@ -759,7 +763,6 @@ void createTaskFunctions(void) {
       } else if (info->isPrimitive(PRIM_BLOCK_COFORALL)) {
         fn = new FnSymbol("coforall_fn");
         fn->addFlag(FLAG_COBEGIN_OR_COFORALL);
-        isCoforall = true;
       } else if (info->isPrimitive(PRIM_BLOCK_ON) ||
                  info->isPrimitive(PRIM_BLOCK_BEGIN_ON) ||
                  info->isPrimitive(PRIM_BLOCK_COBEGIN_ON) ||
@@ -818,7 +821,7 @@ void createTaskFunctions(void) {
         bool needsMemFence = true; // only used with fCacheRemote
         bool isBlockingOn = false;
 
-        if( block->blockInfoGet()->isPrimitive(PRIM_BLOCK_ON) ) {
+        if( info->isPrimitive(PRIM_BLOCK_ON) ) {
           isBlockingOn = true;
         }
 
@@ -877,7 +880,7 @@ void createTaskFunctions(void) {
             call->insertAfter(new CallExpr("chpl_rmem_consist_acquire"));
         }
 
-        block->blockInfoGet()->remove();
+        info->remove();
 
         // Now build the fn for the task or on statement.
 
@@ -930,6 +933,9 @@ void createTaskFunctions(void) {
 
           if (block->byrefVars != NULL)
             block->byrefVars->remove();
+
+          bool isCoforall = info->isPrimitive(PRIM_BLOCK_COFORALL) ||
+                            info->isPrimitive(PRIM_BLOCK_COFORALL_ON);
 
           addVarsToFormalsActuals(fn, uses, call, isCoforall);
           replaceVarUses(fn->body, uses);

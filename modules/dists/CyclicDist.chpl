@@ -146,6 +146,24 @@ They must match the rank and index type of the domains
 "dmapped" using that Cyclic instance.
 
 
+**Convenience Initializer Functions**
+
+It is common for a ``Cyclic`` distribution to distribute its indices
+across all locales. In this case, a convenience function can be used to
+declare variables of cyclic-distributed domain or array type.  These functions
+take a domain or list of ranges as arguments and return a cyclic-distributed
+domain or array.
+
+  .. code-block:: chapel
+
+    use CyclicDist;
+
+    var CyclicDom1 = newCyclicDom({1..5, 1..5});
+    var CyclicArr1 = newCyclicArr({1..5, 1..5}, real);
+    var CyclicDom2 = newCyclicDom(1..5, 1..5);
+    var CyclicArr2 = newCyclicArr(1..5, 1..5, real);
+
+
 **Data-Parallel Iteration**
 
 A `forall` loop over a Cyclic-distributed domain or array
@@ -445,11 +463,10 @@ class LocCyclic {
 }
 
 
-pragma "use default init"
 class CyclicDom : BaseRectangularDom {
   const dist: unmanaged Cyclic(rank, idxType);
 
-  var locDoms: [dist.targetLocDom] unmanaged LocCyclicDom(rank, idxType, stridable);
+  var locDoms: [dist.targetLocDom] unmanaged LocCyclicDom(rank, idxType);
 
   var whole: domain(rank, idxType, stridable);
 }
@@ -459,7 +476,7 @@ proc CyclicDom.setup() {
   if locDoms(dist.targetLocDom.low) == nil {
     coforall localeIdx in dist.targetLocDom {
       on dist.targetLocs(localeIdx) do
-        locDoms(localeIdx) = new unmanaged LocCyclicDom(rank, idxType, stridable, dist.getChunk(whole, localeIdx));
+        locDoms(localeIdx) = new unmanaged LocCyclicDom(rank, idxType, dist.getChunk(whole, localeIdx));
     }
   } else {
     coforall localeIdx in dist.targetLocDom {
@@ -471,7 +488,7 @@ proc CyclicDom.setup() {
   }
 }
 
-proc CyclicDom.dsiDestroyDom() {
+override proc CyclicDom.dsiDestroyDom() {
     coforall localeIdx in dist.targetLocDom {
       on dist.targetLocs(localeIdx) do
         delete locDoms(localeIdx);
@@ -505,7 +522,7 @@ proc CyclicDom.dsiAlignment return whole.alignment;
 
 proc CyclicDom.dsiStride return whole.stride;
 
-proc CyclicDom.dsiMember(i) return whole.member(i);
+proc CyclicDom.dsiMember(i) return whole.contains(i);
 
 proc CyclicDom.dsiIndexOrder(i) return whole.indexOrder(i);
 
@@ -651,28 +668,27 @@ proc CyclicDom.dsiLocalSlice(param stridable: bool, ranges) {
 }
 
 
-pragma "use default init"
 class LocCyclicDom {
   param rank: int;
   type idxType;
-  param stridable: bool;
 
-  var myBlock: domain(rank, idxType, true);
+  // The local block type is always stridable
+  // (because that's inherent to the cyclic distribution)
+  var myBlock: domain(rank, idxType, stridable=true);
 }
 
 //
 // Added as a performance stopgap to avoid returning a domain
 //
-proc LocCyclicDom.member(i) return myBlock.member(i);
+proc LocCyclicDom.contains(i) return myBlock.contains(i);
 
 
-pragma "use default init"
 class CyclicArr: BaseRectangularArr {
   var doRADOpt: bool = defaultDoRADOpt;
   var dom: unmanaged CyclicDom(rank, idxType, stridable);
 
-  var locArr: [dom.dist.targetLocDom] unmanaged LocCyclicArr(eltType, rank, idxType, stridable);
-  var myLocArr: unmanaged LocCyclicArr(eltType=eltType, rank=rank, idxType=idxType, stridable=stridable);
+  var locArr: [dom.dist.targetLocDom] unmanaged LocCyclicArr(eltType, rank, idxType);
+  var myLocArr: unmanaged LocCyclicArr(eltType=eltType, rank=rank, idxType=idxType);
   const SENTINEL = max(rank*idxType);
 }
 
@@ -711,7 +727,8 @@ proc CyclicArr.setupRADOpt() {
           myLocArr.locRAD = nil;
         }
         if disableCyclicLazyRAD {
-          myLocArr.locRAD = new unmanaged LocRADCache(eltType, rank, idxType, stridable, dom.dist.targetLocDom);
+          myLocArr.locRAD = new unmanaged LocRADCache(eltType, rank, idxType,
+              stridable=true, dom.dist.targetLocDom);
           myLocArr.locCyclicRAD = new unmanaged LocCyclicRADCache(rank, idxType, dom.dist.startIdx, dom.dist.targetLocDom);
           for l in dom.dist.targetLocDom {
             if l != localeIdx {
@@ -727,7 +744,7 @@ proc CyclicArr.setupRADOpt() {
 proc CyclicArr.setup() {
   coforall localeIdx in dom.dist.targetLocDom {
     on dom.dist.targetLocs(localeIdx) {
-      locArr(localeIdx) = new unmanaged LocCyclicArr(eltType, rank, idxType, stridable, dom.locDoms(localeIdx));
+      locArr(localeIdx) = new unmanaged LocCyclicArr(eltType, rank, idxType, dom.locDoms(localeIdx));
       if this.locale == here then
         myLocArr = locArr(localeIdx);
     }
@@ -778,7 +795,7 @@ inline proc _remoteAccessData.getDataIndex(
 
 proc CyclicArr.dsiAccess(i:rank*idxType) ref {
   local {
-    if myLocArr != nil && myLocArr.locDom.member(i) then
+    if myLocArr != nil && myLocArr.locDom.contains(i) then
       return myLocArr.this(i);
   }
   if doRADOpt && !stridable {
@@ -791,7 +808,8 @@ proc CyclicArr.dsiAccess(i:rank*idxType) ref {
         if myLocArr.locRAD == nil {
           myLocArr.lockLocRAD();
           if myLocArr.locRAD == nil {
-            var tempLocRAD = new unmanaged LocRADCache(eltType, rank, idxType, stridable, dom.dist.targetLocDom);
+            var tempLocRAD = new unmanaged LocRADCache(eltType, rank, idxType,
+                stridable=true, dom.dist.targetLocDom);
             myLocArr.locCyclicRAD = new unmanaged LocCyclicRADCache(rank, idxType, dom.dist.startIdx, dom.dist.targetLocDom);
             tempLocRAD.RAD.blk = SENTINEL;
             myLocArr.locRAD = tempLocRAD;
@@ -886,7 +904,7 @@ iter CyclicArr.these(param tag: iterKind, followThis, param fast: bool = false) 
   } else {
     proc accessHelper(i) ref {
       if myLocArr then local {
-        if myLocArr.locDom.member(i) then
+        if myLocArr.locDom.contains(i) then
           return myLocArr.this(i);
       }
       return dsiAccess(i);
@@ -947,18 +965,13 @@ class LocCyclicArr {
   type eltType;
   param rank: int;
   type idxType;
-  param stridable: bool;
 
-  const locDom: LocCyclicDom(rank, idxType, stridable);
+  const locDom: unmanaged LocCyclicDom(rank, idxType);
 
-  var locRAD: LocRADCache(eltType, rank, idxType, stridable); // non-nil if doRADOpt=true
-  var locCyclicRAD: LocCyclicRADCache(rank, idxType); // see below for why
+  var locRAD: unmanaged LocRADCache(eltType, rank, idxType, stridable=true); // non-nil if doRADOpt=true
+  var locCyclicRAD: unmanaged LocCyclicRADCache(rank, idxType); // see below for why
   var myElems: [locDom.myBlock] eltType;
-  var locRADLock: atomicbool; // This will only be accessed locally, so
-                              // force the use of processor atomics
-
-  // INIT TODO: using default-init resulted in extra GETs for the tests in
-  // distributions/robust/arithmetic/performance/multilocale
+  var locRADLock: chpl__processorAtomicType(bool); // only accessed locally
 
   // These functions will always be called on this.locale, and so we do
   // not have an on statement around the while loop below (to avoid
@@ -1164,10 +1177,28 @@ proc CyclicArr.dsiLocalSubdomain() {
 proc CyclicDom.dsiLocalSubdomain() {
   // TODO -- could be replaced by a privatized myLocDom in CyclicDom
   // as it is with CyclicArr
-  var myLocDom:unmanaged LocCyclicDom(rank, idxType, stridable) = nil;
+  var myLocDom:unmanaged LocCyclicDom(rank, idxType) = nil;
   for (loc, locDom) in zip(dist.targetLocs, locDoms) {
     if loc == here then
       myLocDom = locDom;
   }
   return myLocDom.myBlock;
+}
+
+proc newCyclicDom(dom: domain) {
+  return dom dmapped Cyclic(startIdx=dom.low);
+}
+
+proc newCyclicArr(dom: domain, type eltType) {
+  var D = newCyclicDom(dom);
+  var A: [D] eltType;
+  return A;
+}
+
+proc newCyclicDom(rng: range...) {
+  return newCyclicDom({(...rng)});
+}
+
+proc newCyclicArr(rng: range..., type eltType) {
+  return newCyclicArr({(...rng)}, eltType);
 }

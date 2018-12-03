@@ -61,8 +61,8 @@ module DefaultAssociative {
   
     // We explicitly use processor atomics here since this is not
     // by design a distributed data structure
-    var numEntries: atomic_int64;
-    var tableLock: atomicbool; // do not access directly, use function below
+    var numEntries: chpl__processorAtomicType(int);
+    var tableLock: chpl__processorAtomicType(bool); // do not access directly
     var tableSizeNum = 1;
     var tableSize : int;
     var tableDom = {0..tableSize-1};
@@ -267,7 +267,7 @@ module DefaultAssociative {
       return dist;
     }
 
-    proc dsiClear() {
+    override proc dsiClear() {
       on this {
         if parSafe then lockTable();
         for slot in tableDom {
@@ -556,7 +556,6 @@ module DefaultAssociative {
     }
   }
   
-  pragma "use default init"
   class DefaultAssociativeArr: BaseArr {
     type eltType;
     type idxType;
@@ -637,7 +636,19 @@ module DefaultAssociative {
         return data(0);
       }
     }
-  
+
+    inline proc dsiLocalAccess(i) ref
+      return dsiAccess(i);
+
+    inline proc dsiLocalAccess(i)
+    where shouldReturnRvalueByValue(eltType)
+      return dsiAccess(i);
+
+    inline proc dsiLocalAccess(i) const ref
+    where shouldReturnRvalueByConstRef(eltType)
+      return dsiAccess(i);
+
+
     iter these() ref {
       for slot in dom {
         yield dsiAccess(slot);
@@ -704,30 +715,96 @@ module DefaultAssociative {
         }
       }
     }
-  
-    proc dsiSerialReadWrite(f /*: Reader or Writer*/) {
-      var first = true;
-      for val in this {
-        if (first) then
-          first = false;
-        else
-          f <~> new ioLiteral(" ");
-        f <~> val;
+
+    proc dsiSerialReadWrite(f /*: channel*/) {
+      var binary = f.binary();
+      var arrayStyle = f.styleElement(QIO_STYLE_ELEMENT_ARRAY);
+      var isspace = arrayStyle == QIO_ARRAY_FORMAT_SPACE && !binary;
+      var isjson = arrayStyle == QIO_ARRAY_FORMAT_JSON && !binary;
+      var ischpl = arrayStyle == QIO_ARRAY_FORMAT_CHPL && !binary;
+
+      if !f.writing && ischpl {
+        this.readChapelStyleAssocArray(f);
+      } else {
+        if isjson || ischpl {
+          f <~> new ioLiteral("[");
+        }
+
+        var first = true;
+
+        for (key, val) in zip(this.dom, this) {
+          if first then first = false;
+          else if isspace then f <~> new ioLiteral(" ");
+          else if isjson || ischpl then f <~> new ioLiteral(", ");
+
+          if f.writing && ischpl {
+            f <~> key;
+            f <~> new ioLiteral(" => ");
+          }
+
+          f <~> val;
+        }
+      }
+      if isjson || ischpl {
+        f <~> new ioLiteral("]");
       }
     }
+
+    proc readChapelStyleAssocArray(f) {
+      var first = true;
+      var read_end = false;
+
+      f <~> new ioLiteral("[");
+
+      while ! f.error() {
+        if first {
+          first = false;
+          // but check for a ]
+          f <~> new ioLiteral("]");
+          if f.error() == EFORMAT {
+            f.clearError();
+          } else {
+            read_end = true;
+            break;
+          }
+        } else {
+          // read a comma or a space.
+          f <~> new ioLiteral(",");
+
+          if f.error() == EFORMAT {
+            f.clearError();
+            // No comma.
+            break;
+          }
+        }
+
+        // Read a key
+        var key: idxType;
+        f <~> key;
+        // Read =>
+        f <~> new ioLiteral("=>");
+        // Read the value
+        f <~> dsiAccess(key);
+      }
+
+      if ! read_end {
+        f <~> new ioLiteral("]");
+      }
+    }
+
     proc dsiSerialWrite(f) { this.dsiSerialReadWrite(f); }
     proc dsiSerialRead(f) { this.dsiSerialReadWrite(f); }
-  
+
     //
     // Associative array interface
     //
-  
+
     iter dsiSorted(comparator) {
       use Sort;
       var tableCopy: [0..dom.dsiNumIndices-1] eltType;
       for (copy, slot) in zip(tableCopy.domain, dom._fullSlots()) do
         tableCopy(copy) = data(slot);
-  
+
       sort(tableCopy, comparator=comparator);
   
       for elem in tableCopy do
@@ -753,13 +830,18 @@ module DefaultAssociative {
     }
 
     proc dsiTargetLocales() {
-      compilerError("targetLocales is unsupported by associative domains");
+      return [this.locale, ];
     }
 
     proc dsiHasSingleLocalSubdomain() param return true;
 
     proc dsiLocalSubdomain() {
-      return _newDomain(dom);
+      if this.data.locale == here {
+        return _getDomain(dom);
+      } else {
+        var a: domain(dom.idxType, parSafe=dom.parSafe);
+        return a;
+      }
     }
 
     override proc dsiDestroyArr() {

@@ -32,7 +32,6 @@ module DynamicIters {
    An atomic test-and-set lock.
 */
 pragma "no doc"
-pragma "use default init"
 record vlock {
   var l: atomic bool;
   proc lock() {
@@ -106,7 +105,6 @@ where tag == iterKind.leader
   const remain:rType=densify(c,c);
 
   // If the number of tasks is insufficient, yield in serial
-  if c.length == 0 then halt("The range is empty");
   if nTasks == 1 then {
     if debugDynamicIters then
       writeln("Dynamic Iterator: serial execution because there is not enough work");
@@ -237,7 +235,7 @@ iter dynamic(param tag:iterKind, c:domain, chunkSize:int=1, numTasks:int, parDim
 where tag == iterKind.follower
 {
   //Invoke the default rectangular domain follower iterator
-  for i in c._value.these(tag=iterKind.follower, followThis=followThis) do
+  for i in c.these(tag=iterKind.follower, followThis=followThis) do
     yield i;
 }
 
@@ -282,7 +280,6 @@ where tag == iterKind.leader
   type rType=c.type;
   var remain:rType = densify(c,c);
   // If the number of tasks is insufficient, yield in serial
-  if c.length == 0 then halt("The range is empty");
   if nTasks == 1 then {
     if debugDynamicIters then
       writeln("Guided Iterator: serial execution because there is not enough work");
@@ -402,7 +399,7 @@ iter guided(param tag:iterKind, c:domain, numTasks:int, parDim:int, followThis)
 where tag == iterKind.follower
 {
   // Invoke the default rectangular domain follower iterator.
-  for i in c._value.these(tag=iterKind.follower, followThis=followThis) do {
+  for i in c.these(tag=iterKind.follower, followThis=followThis) do {
     yield i;
   }
 }
@@ -488,7 +485,6 @@ where tag == iterKind.leader
   type rType=c.type;
 
   // If the number of tasks is insufficient, yield in serial
-  if c.length == 0 then halt("The range is empty");
   if nTasks == 1 then {
     if debugDynamicIters then
       writeln("Adaptive work-stealing Iterator: serial execution because there is not enough work");
@@ -694,7 +690,7 @@ iter adaptive(param tag:iterKind, c:domain, numTasks:int, parDim:int, followThis
 where tag == iterKind.follower
 {
   // Invoke the default rectangular domain follower iterator.
-  for i in c._value.these(tag=iterKind.follower, followThis=followThis) do {
+  for i in c.these(tag=iterKind.follower, followThis=followThis) do {
     yield i;
   }
 }
@@ -702,12 +698,15 @@ where tag == iterKind.follower
 //************************* Helper functions
 private proc defaultNumTasks(nTasks:int)
 {
-  var dnTasks=nTasks;
-  if nTasks==0 then {
-    if dataParTasksPerLocale==0 then dnTasks=here.maxTaskPar;
-      else dnTasks=dataParTasksPerLocale;
-  } else if nTasks<0 then {
-    halt("'numTasks' is negative");
+  var dnTasks = nTasks;
+  if nTasks <= 0  {
+    if dataParTasksPerLocale == 0 then
+      dnTasks = here.maxTaskPar;
+    else
+      dnTasks = dataParTasksPerLocale;
+
+    if nTasks < 0 then
+      warning("'numTasks' < 0, defaulting to numTasks=" + dnTasks);
   }
   return dnTasks;
 }

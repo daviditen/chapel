@@ -114,7 +114,7 @@ module ChapelSyncvar {
     proc init(type valType) {
       ensureFEType(valType);
       this.valType = valType;
-      this.wrapped = new unmanaged (getSyncClassType(valType))(valType);
+      this.wrapped = new unmanaged (getSyncClassType(valType))();
     }
 
     //
@@ -136,7 +136,7 @@ module ChapelSyncvar {
 
     proc deinit() {
       if isOwned == true then
-        delete wrapped;
+        delete _to_unmanaged(wrapped);
     }
 
     // Do not allow implicit reads of sync vars.
@@ -158,7 +158,7 @@ module ChapelSyncvar {
   */
 
   pragma "no doc"
-  proc isSyncType(type t) param where t : _syncvar {
+  proc isSyncType(type t:_syncvar) param {
     return true;
   }
 
@@ -312,7 +312,7 @@ module ChapelSyncvar {
   // This version has to be available to take precedence
   inline proc chpl__autoDestroy(x : _syncvar(?)) {
     if x.isOwned == true then
-      delete x.wrapped;
+      delete _to_unmanaged(x.wrapped);
   }
 
   pragma "no doc"
@@ -661,7 +661,7 @@ module ChapelSyncvar {
 
     proc deinit() {
       if isOwned == true then
-        delete wrapped;
+        delete _to_unmanaged(wrapped);
     }
 
     // Do not allow implicit reads of single vars.
@@ -683,7 +683,7 @@ module ChapelSyncvar {
   */
 
   pragma "no doc"
-  proc isSingleType(type t) param where t : _singlevar {
+  proc isSingleType(type t:_singlevar) param {
     return true;
   }
 
@@ -755,7 +755,7 @@ module ChapelSyncvar {
   // This version has to be available to take precedence
   inline proc chpl__autoDestroy(x : _singlevar(?)) {
     if x.isOwned == true then
-      delete x.wrapped;
+      delete _to_unmanaged(x.wrapped);
   }
 
   pragma "no doc"
@@ -968,13 +968,17 @@ private module AlignedTSupport {
   proc castableToAlignedT(type t) param {
     return isIntegralType(t) || isBoolType(t);
   }
-  inline proc _cast(type t, x : integral) where t : aligned_t {
+
+  inline proc _cast(type t:aligned_t, x : integral) {
     return __primitive("cast", t, x);
   }
-  inline proc _cast(type t, x : bool) where t : aligned_t {
+  inline proc _cast(type t:aligned_t, x : bool) {
     return __primitive("cast", t, x);
   }
-  inline proc _cast(type t, x : aligned_t) where castableToAlignedT(t) {
+  inline proc _cast(type t:chpl_anybool, x : aligned_t) {
+    return __primitive("cast", t, x);
+  }
+  inline proc _cast(type t:integral, x : aligned_t) {
     return __primitive("cast", t, x);
   }
 

@@ -6,9 +6,6 @@ Checks environment variables first, then chplconfig file for definitions
 import os
 import sys
 
-chplenv_dir = os.path.dirname(__file__)
-sys.path.insert(0, os.path.abspath(chplenv_dir))
-
 from utils import memoize
 
 # List of Chapel Environment Variables
@@ -35,9 +32,9 @@ chplvars = [
              'CHPL_HWLOC',
              'CHPL_JEMALLOC',
              'CHPL_REGEXP',
-             'CHPL_WIDE_POINTERS',
              'CHPL_LLVM',
              'CHPL_AUX_FILESYS',
+             'CHPL_LIB_PIC',
            ]
 
 
@@ -219,9 +216,8 @@ def items():
 
 def _main():
     """ Print overrides that are currently set via environment/chplconfig """
-    for var in allvars():
-        sys.stdout.write(var)
-        sys.stdout.write('\n')
+    for key, val in items():
+        sys.stdout.write('{0}={1}\n'.format(key, val))
 
 
 if __name__ == '__main__':

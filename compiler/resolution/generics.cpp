@@ -50,9 +50,7 @@ static bool            fixupDefaultInitCopy(FnSymbol* fn,
 
 static void
 explainInstantiation(FnSymbol* fn) {
-  if (strcmp(fn->name, fExplainInstantiation) &&
-      (strncmp(fn->name, "_construct_", 11) ||
-       strcmp(fn->name+11, fExplainInstantiation)))
+  if (strcmp(fn->name, fExplainInstantiation) != 0)
     return;
   if (explainInstantiationModule && explainInstantiationModule != fn->defPoint->getModule())
     return;
@@ -60,18 +58,12 @@ explainInstantiation(FnSymbol* fn) {
     return;
 
   char msg[1024] = "";
-  int len;
-  if (fn->hasFlag(FLAG_CONSTRUCTOR))
-    len = sprintf(msg, "instantiated %s(", fn->_this->type->symbol->name);
-  else
-    len = sprintf(msg, "instantiated %s(", fn->name);
+  int len = sprintf(msg, "instantiated %s(", fn->name);
   bool first = true;
   for_formals(formal, fn) {
     form_Map(SymbolMapElem, e, fn->substitutions) {
       ArgSymbol* arg = toArgSymbol(e->key);
       if (!strcmp(formal->name, arg->name)) {
-        if (arg->hasFlag(FLAG_IS_MEME)) // do not show meme argument
-          continue;
         if (first)
           first = false;
         else
@@ -133,15 +125,27 @@ getNewSubType(FnSymbol* fn, Symbol* key, TypeSymbol* actualTS) {
     // With FLAG_REF on the function, that means it's a constructor
     // for the ref type, so re-instantiate it with whatever actualTS is.
     return actualTS;
+  } else if (actualTS->hasFlag(FLAG_REF)) {
+    // the value is a ref and
+    // instantiation of a formal of ref type loses ref
+    return getNewSubType(fn, key, actualTS->getValType()->symbol);
   } else {
-    bool actualRef = actualTS->hasFlag(FLAG_REF);
+    if (isManagedPtrType(actualTS->getValType()))
+      if (!(fn->hasFlag(FLAG_INIT_COPY_FN) ||
+            fn->hasFlag(FLAG_AUTO_COPY_FN) ||
+            fn->hasFlag(FLAG_BUILD_TUPLE) ||
+            fn->hasFlag(FLAG_NO_BORROW_CONVERT) ||
+            fn->hasFlag(FLAG_TYPE_CONSTRUCTOR) ||
+            (fn->name == astrInit && fn->hasFlag(FLAG_COMPILER_GENERATED)) ||
+            fn->name == astr_cast))
+        if (ArgSymbol* arg = toArgSymbol(key))
+          if (!arg->hasFlag(FLAG_TYPE_VARIABLE))
+            if (arg->intent == INTENT_CONST ||
+                arg->intent == INTENT_BLANK)
+              if (arg->getValType() == dtAny)
+                return getManagedPtrBorrowType(actualTS->getValType())->symbol;
 
-    if(actualRef)
-      // the value is a ref and
-      // instantiation of a formal of ref type loses ref
-      return getNewSubType(fn, key, actualTS->getValType()->symbol);
-    else
-      return actualTS;
+    return actualTS;
   }
 }
 
@@ -505,7 +509,7 @@ FnSymbol* instantiateSignature(FnSymbol*  fn,
       if (fn->hasFlag(FLAG_TYPE_CONSTRUCTOR) == true) {
         AggregateType* ct = toAggregateType(fn->retType);
 
-        if (ct->initializerStyle          != DEFINES_INITIALIZER &&
+        if (ct->hasUserDefinedInit        == false &&
             ct->wantsDefaultInitializer() == false) {
           newType = instantiateTypeForTypeConstructor(fn, subs, call, ct);
 
@@ -690,7 +694,7 @@ FnSymbol* instantiateFunction(FnSymbol*  fn,
   newFn->substitutions.map_union(allSubs);
 
   if (call) {
-    newFn->instantiationPoint = getVisibilityBlock(call);
+    newFn->setInstantiationPoint(call);
   }
 
   Expr* putBefore = fn->defPoint;
