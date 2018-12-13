@@ -577,19 +577,17 @@ static Expr* postFoldMove(CallExpr* call) {
 static bool postFoldMoveUpdateForParam(CallExpr* call, Symbol* lhsSym) {
   bool retval = false;
 
-  if (lhsSym->hasFlag(FLAG_MAYBE_PARAM) == true ||
-      lhsSym->isParameter()             == true) {
+  if (lhsSym->hasFlag(FLAG_MAYBE_PARAM) || lhsSym->isParameter()) {
     if (paramMap.get(lhsSym) != NULL) {
       INT_FATAL(call, "parameter set multiple times");
 
-    } else if (lhsSym->isImmediate() == true) {
+    } else if (lhsSym->isImmediate()) {
       retval = true;
 
     } else if (SymExpr* rhs = toSymExpr(call->get(2))) {
       Symbol* rhsSym = rhs->symbol();
 
-      if (rhsSym->isImmediate() == true ||
-          isEnumSymbol(rhsSym)  == true) {
+      if (rhsSym->isImmediate() || isEnumSymbol(rhsSym) || rhsSym == gVoid) {
         paramMap.put(lhsSym, rhsSym);
 
         lhsSym->defPoint->remove();
@@ -600,7 +598,7 @@ static bool postFoldMoveUpdateForParam(CallExpr* call, Symbol* lhsSym) {
       }
     }
 
-    if (lhsSym->isParameter() == true) {
+    if (lhsSym->isParameter()) {
       if (retval == true) {
         if (lhsSym->hasFlag(FLAG_TEMP)     == false  &&
             isLegalParamType(lhsSym->type) == false) {

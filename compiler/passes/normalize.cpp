@@ -1097,17 +1097,17 @@ static void normalizeReturns(FnSymbol* fn) {
   // Check if this function's returns are already normal.
   if (rets.size() == 1 && theRet == fn->body->body.last()) {
     if (SymExpr* se = toSymExpr(theRet->get(1))) {
-      if (fn->hasFlag(FLAG_TYPE_CONSTRUCTOR)    == true ||
-          strcmp ("=",      fn->name)           ==    0 ||
-          strcmp ("_init",  fn->name)           ==    0||
-          strcmp ("_ret",   se->symbol()->name) ==    0) {
+      if (fn->hasFlag(FLAG_TYPE_CONSTRUCTOR)         ||
+          strcmp ("=",      fn->name)           == 0 ||
+          strcmp ("_init",  fn->name)           == 0 ||
+          strcmp ("_ret",   se->symbol()->name) == 0) {
         return;
       }
     }
   }
 
   // Add a void return if needed.
-  if (isIterator == false && rets.size() == 0 && fn->retExprType == NULL) {
+  if (!isIterator && rets.size() == 0 && fn->retExprType == NULL) {
     fn->insertAtTail(new CallExpr(PRIM_RETURN, gVoid));
     return;
   }
@@ -1136,35 +1136,25 @@ static void normalizeReturns(FnSymbol* fn) {
     }
   }
 
-  // If a proc has a void return, do not return any values ever.
-  // (Types are not resolved yet, so we judge by presence of "void returns"
-  // i.e. returns with no expr. See also a related check in semanticChecks.)
-  // (Note iterators always need an RVV so resolution knows to resolve the
-  //  return/yield type)
-  if (isIterator == false && numVoidReturns != 0) {
-    fn->insertAtTail(new CallExpr(PRIM_RETURN, gVoid));
+  // Handle declared return type.
+  retval = newTemp("ret", fn->retType);
 
-  } else {
-    // Handle declared return type.
-    retval = newTemp("ret", fn->retType);
+  retval->addFlag(FLAG_RVV);
 
-    retval->addFlag(FLAG_RVV);
-
-    if (fn->retTag == RET_PARAM) {
-      retval->addFlag(FLAG_PARAM);
-    }
-
-    if (fn->retTag == RET_TYPE) {
-      retval->addFlag(FLAG_TYPE_VARIABLE);
-    }
-
-    if (fn->hasFlag(FLAG_MAYBE_TYPE)) {
-      retval->addFlag(FLAG_MAYBE_TYPE);
-    }
-
-    fn->insertAtHead(new DefExpr(retval));
-    fn->insertAtTail(new CallExpr(PRIM_RETURN, retval));
+  if (fn->retTag == RET_PARAM) {
+    retval->addFlag(FLAG_PARAM);
   }
+
+  if (fn->retTag == RET_TYPE) {
+    retval->addFlag(FLAG_TYPE_VARIABLE);
+  }
+
+  if (fn->hasFlag(FLAG_MAYBE_TYPE)) {
+    retval->addFlag(FLAG_MAYBE_TYPE);
+  }
+
+  fn->insertAtHead(new DefExpr(retval));
+  fn->insertAtTail(new CallExpr(PRIM_RETURN, retval));
 
   bool genericArrayRet = hasGenericArrayReturn(fn);
 
@@ -1173,7 +1163,7 @@ static void normalizeReturns(FnSymbol* fn) {
   for_vector(CallExpr, ret, rets) {
     SET_LINENO(ret);
 
-    if (isIterator == false && retval != NULL) {
+    if (!isIterator && retval != NULL) {
       insertRetMove(fn, retval, ret, genericArrayRet);
     }
 
@@ -1191,7 +1181,7 @@ static void normalizeReturns(FnSymbol* fn) {
     fn->retExprType->remove();
   }
 
-  if (labelIsUsed == false) {
+  if (!labelIsUsed) {
     label->defPoint->remove();
   }
 }
