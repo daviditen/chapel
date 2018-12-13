@@ -113,12 +113,13 @@
     EnumType*                 penumtype;
     std::vector<DefExpr*>*    pvecOfDefs;
     FnSymbol*                 pfnsymbol;
-    Flag                      flag;
+    ModuleSymbol*             pmodsymbol;
     ProcIter                  procIter;
     FlagSet*                  flagSet;
     ShadowVarSymbol*          pShadowVar;
     ShadowVarPrefix           pShadowVarPref;
     std::vector<OnlyRename*>* ponlylist;
+    std::set<Flag>*           pflagset;
   };
 
   #endif
@@ -138,6 +139,7 @@
     int         last_line;
     int         last_column;
     const char* comment;
+    const char* prevModule;
   };
 
   #define YYLTYPE_IS_DECLARED 1
@@ -296,7 +298,7 @@
 %token TCATCH TCLASS TCOBEGIN TCOFORALL TCOMPLEX TCONFIG TCONST TCONTINUE
 %token TDEFER TDELETE TDMAPPED TDO TDOMAIN
 %token TELSE TENUM TEXCEPT TEXPORT TEXTERN
-%token TFOR TFORALL TFORWARDING
+%token TFALSE TFOR TFORALL TFORWARDING
 %token TIF TIMAG TIN TINDEX TINLINE TINOUT TINT TITER
 %token TLABEL TLAMBDA TLET TLOCAL TLOCALE
 %token TMINUSMINUS TMODULE
@@ -305,7 +307,7 @@
 %token TPARAM TPLUSPLUS TPRAGMA TPRIMITIVE TPRIVATE TPROC TPROTOTYPE TPUBLIC
 %token TREAL TRECORD TREDUCE TREF TREQUIRE TRETURN
 %token TSCAN TSELECT TSERIAL TSHARED TSINGLE TSPARSE TSTRING TSUBDOMAIN TSYNC
-%token TTHEN TTHIS TTHROW TTHROWS TTRY TTRYBANG TTYPE
+%token TTHEN TTHIS TTHROW TTHROWS TTRUE TTRY TTRYBANG TTYPE
 %token TUINT TUNDERSCORE TUNION TUNMANAGED TUSE
 %token TVAR
 %token TWHEN TWHERE TWHILE TWITH
@@ -370,7 +372,6 @@
 %left TDOT TLP TRSBR TLCBR
 %nonassoc TPRAGMA
 
-%type <flag> opt_config
 %type <b> access_control
 %type <b> opt_prototype
 %type <b> opt_throws_error
@@ -393,6 +394,7 @@
 %type <pblockstmt> toplevel_stmt
 %type <vpch>       pragma_ls
 
+%type <pmodsymbol> module_decl_start
 %type <pblockstmt> module_decl_stmt
 
 %type <pblockstmt> block_stmt
@@ -418,11 +420,14 @@
 %type <pexpr>      catch_stmt
 %type <pexpr>      catch_expr
 
+%type <pflagset> var_decl_type
+
 %type <pblockstmt> type_alias_decl_stmt type_alias_decl_stmt_inner fn_decl_stmt class_decl_stmt
 %type <pblockstmt> enum_decl_stmt
 
 %type <pblockstmt> var_decl_stmt var_decl_stmt_inner_ls
 %type <pblockstmt> var_decl_stmt_inner tuple_var_decl_stmt_inner_ls
+
 
 %type <pblockstmt> function_body_stmt opt_function_body_stmt
 
@@ -438,7 +443,7 @@
 %type <pcallexpr> zippered_iterator
 %type <pexpr> fun_expr call_expr dot_expr lhs_expr unary_op_expr binary_op_expr
 %type <pexpr> parenthesized_expr expr actual_expr
-%type <pexpr> literal_expr opt_where_part
+%type <pexpr> bool_literal literal_expr opt_where_part
 %type <pexpr> stmt_level_expr type_level_expr scalar_type
 %type <pexpr> ident_expr for_expr cond_expr nil_expr io_expr new_expr let_expr
 %type <pexpr> reduce_expr scan_expr reduce_scan_op_expr opt_init_expr
@@ -519,15 +524,35 @@ stmt:
 | error TSEMI                          { $$ = buildErrorStandin(); }
 ;
 
+module_decl_start:
+  access_control opt_prototype TMODULE ident_def
+    {
+      $$ = buildModule($4, currentModuleType, NULL, yyfilename, $1, $2, @1.comment);
+      // store previous module name in order to restore it once we're
+      // done with this module in module_decl_stmt below.  Ultimately,
+      // we will need to store a stack of module names in order to
+      // support full module path resolution of -s config flags.
+      @$.prevModule = currentModuleName;
+      currentModuleName = $4;
+    }
+;
+
 module_decl_stmt:
-  access_control opt_prototype TMODULE ident_def TLCBR TRCBR
-    { $$ = buildChapelStmt(new DefExpr(buildModule($4, currentModuleType,
-    new BlockStmt(), yyfilename, $1, $2, @1.comment))); }
-| access_control opt_prototype TMODULE ident_def TLCBR stmt_ls TRCBR
-    { $$ = buildChapelStmt(new DefExpr(buildModule($4, currentModuleType, $6, yyfilename, $1, $2, @1.comment))); }
-| access_control opt_prototype TMODULE ident_def TLCBR error TRCBR
-    {$$ = buildChapelStmt(new DefExpr(buildModule($4, currentModuleType,
-        buildErrorStandin(), yyfilename, $1, $2, @1.comment))); }
+   module_decl_start TLCBR TRCBR
+    { $1->block = new BlockStmt();
+      $$ = buildChapelStmt(new DefExpr($1));
+      currentModuleName = @1.prevModule;  // restore previous module name
+    }
+| module_decl_start TLCBR stmt_ls TRCBR
+    { $1->block = $3;
+      $$ = buildChapelStmt(new DefExpr($1));
+      currentModuleName = @1.prevModule;  // restore previous module name
+    }
+| module_decl_start TLCBR error TRCBR
+    { $1->block = buildErrorStandin();
+      $$ = buildChapelStmt(new DefExpr($1));
+      currentModuleName = @1.prevModule;  // restore previous module name
+    }
 ;
 
 access_control:
@@ -635,11 +660,15 @@ opt_label_ident:
 ident_fn_def:
   TIDENT                   { $$ = $1; }
 | TTHIS                    { $$ = "this"; }
+| TFALSE                   { $$ = "false"; redefiningReservedWordError($$); }
+| TTRUE                    { $$ = "true"; redefiningReservedWordError($$); }
 | internal_type_ident_def  { $$ = $1; redefiningReservedTypeError($1); }
 
 ident_def:
   TIDENT                   { $$ = $1; }
-| TTHIS                    { $$ = "this"; redefiningReservedWordError("this"); }
+| TTHIS                    { $$ = "this"; redefiningReservedWordError($$); }
+| TFALSE                   { $$ = "false"; redefiningReservedWordError($$); }
+| TTRUE                    { $$ = "true"; redefiningReservedWordError($$); }
 | internal_type_ident_def  { $$ = $1; redefiningReservedTypeError($1); }
 ;
 
@@ -1344,53 +1373,32 @@ opt_init_type:
     { $$ = buildForallLoopExprFromArrayType($2); } // Cannot be a type_level_expr as expr inherits from type_level_expr.
 ;
 
-var_decl_stmt:
-  opt_config TPARAM var_decl_stmt_inner_ls TSEMI
-    {
-      std::set<Flag> flags;
-      flags.insert($1);
-      flags.insert(FLAG_PARAM);
-      $$ = buildVarDecls($3, flags, @1.comment);
-      context->latestComment = NULL;
-    }
-| opt_config TCONST var_decl_stmt_inner_ls TSEMI
-    {
-      std::set<Flag> flags;
-      flags.insert($1);
-      flags.insert(FLAG_CONST);
-      $$ = buildVarDecls($3, flags, @1.comment);
-      context->latestComment = NULL;
-    }
-| opt_config TREF var_decl_stmt_inner_ls TSEMI
-    {
-      std::set<Flag> flags;
-      flags.insert($1);
-      flags.insert(FLAG_REF_VAR);
-      $$ = buildVarDecls($3, flags, @1.comment);
-      context->latestComment = NULL;
-    }
-| opt_config TCONST TREF var_decl_stmt_inner_ls TSEMI
-    {
-      std::set<Flag> flags;
-      flags.insert($1);
-      flags.insert(FLAG_CONST);
-      flags.insert(FLAG_REF_VAR);
-      $$ = buildVarDecls($4, flags, @1.comment);
-      context->latestComment = NULL;
-    }
-| opt_config TVAR var_decl_stmt_inner_ls TSEMI
-    {
-      std::set<Flag> flags;
-      flags.insert($1);
-      $$ = buildVarDecls($3, flags, @1.comment);
-      context->latestComment = NULL;
-    }
+var_decl_type:
+  TPARAM      { $$ = buildVarDeclFlags(FLAG_PARAM); }
+| TCONST      { $$ = buildVarDeclFlags(FLAG_CONST); }
+| TREF        { $$ = buildVarDeclFlags(FLAG_REF_VAR); }
+| TCONST TREF { $$ = buildVarDeclFlags(FLAG_CONST, FLAG_REF_VAR); }
+| TVAR        { $$ = buildVarDeclFlags(); }
 ;
 
-opt_config:
-            { $$ = FLAG_UNKNOWN; @$.comment = context->latestComment; context->latestComment = NULL; }
-| TCONFIG   { $$ = FLAG_CONFIG;  @$.comment = context->latestComment; context->latestComment = NULL; }
-| TEXTERN   { $$ = FLAG_EXTERN;  @$.comment = context->latestComment; context->latestComment = NULL; }
+var_decl_stmt:
+  TCONFIG var_decl_type var_decl_stmt_inner_ls TSEMI
+    {
+      $2->insert(FLAG_CONFIG);
+      $$ = buildVarDecls($3, context->latestComment, $2);
+      context->latestComment = NULL;
+    }
+| TEXTERN opt_expr var_decl_type var_decl_stmt_inner_ls TSEMI
+    {
+      $3->insert(FLAG_EXTERN);
+      $$ = buildVarDecls($4, context->latestComment, $3, $2);
+      context->latestComment = NULL;
+    }
+| var_decl_type var_decl_stmt_inner_ls TSEMI
+    {
+      $$ = buildVarDecls($2, context->latestComment, $1);
+      context->latestComment = NULL;
+    }
 ;
 
 var_decl_stmt_inner_ls:
@@ -1866,8 +1874,14 @@ parenthesized_expr:
 | TLP tuple_expr_ls TCOMMA TRP      { $$ = buildTuple($2); }
 ;
 
+bool_literal:
+  TFALSE { $$ = new SymExpr(gFalse); }
+| TTRUE  { $$ = new SymExpr(gTrue); }
+;
+
 literal_expr:
-  INTLITERAL            { $$ = buildIntLiteral($1, yyfilename, chplLineno);    }
+  bool_literal
+| INTLITERAL            { $$ = buildIntLiteral($1, yyfilename, chplLineno);    }
 | REALLITERAL           { $$ = buildRealLiteral($1);   }
 | IMAGLITERAL           { $$ = buildImagLiteral($1);   }
 | STRINGLITERAL         { $$ = buildStringLiteral($1); }

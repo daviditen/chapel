@@ -32,15 +32,21 @@
 
 #ifdef HAVE_LLVM
 #include "clang/AST/GlobalDecl.h"
+
+// rely on CodeGenOptions.h being included from CompilerInstance.h
+// if we need to change that, LLVM 6 named it
+//   clang/Frontend/CodeGenOptions.h
+// but LLVM 8 named it
+//   clang/Basic/CodeGenOptions.h
+
 #include "clang/Basic/Version.h"
 #include "clang/CodeGen/BackendUtil.h"
 #include "clang/CodeGen/CodeGenABITypes.h"
 #include "clang/CodeGen/ModuleBuilder.h"
-#include "clang/Frontend/CompilerInstance.h"
 #include "clang/Driver/Compilation.h"
 #include "clang/Driver/Driver.h"
 #include "clang/Driver/Job.h"
-#include "clang/Frontend/CodeGenOptions.h"
+#include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Lex/MacroInfo.h"
@@ -1588,9 +1594,7 @@ void runClang(const char* just_parse_filename) {
   } else if (0 == strcmp(CHPL_LLVM, "llvm")) {
     llvm_install += CHPL_THIRD_PARTY;
     llvm_install += "/llvm/install/";
-    llvm_install += CHPL_HOST_PLATFORM;
-    llvm_install += "-";
-    llvm_install += CHPL_HOST_COMPILER;
+    llvm_install += CHPL_LLVM_UNIQ_CFG_PATH;
     llvm_install += "/bin/";
     clangCC = llvm_install + "clang";
     clangCXX = llvm_install + "clang++";
@@ -1601,9 +1605,7 @@ void runClang(const char* just_parse_filename) {
   // read clang-sysroot-arguments
   std::string sysroot_arguments(CHPL_THIRD_PARTY);
   sysroot_arguments += "/llvm/install/";
-  sysroot_arguments += CHPL_HOST_PLATFORM;
-  sysroot_arguments += "-";
-  sysroot_arguments += CHPL_HOST_COMPILER;
+  sysroot_arguments += CHPL_LLVM_UNIQ_CFG_PATH;
   sysroot_arguments += "/configured-clang-sysroot-arguments";
 
   // read arguments from configured-clang-sysroot-arguments
@@ -2780,6 +2782,16 @@ void makeBinaryLLVM(void) {
   if (compilingWithPrgEnv()) {
     std::string gather_prgenv(CHPL_HOME);
     gather_prgenv += "/util/config/gather-cray-prgenv-arguments.bash link '";
+
+    if (fLinkStyle == LS_DEFAULT &&
+        gather_prgenv.find("-Wl,-Bdynamic") == std::string::npos) {
+      // Cray PrgEnv defaults to static linking.  If we are asking for
+      // the default link type, and we don't find an explicit dynamic
+      // flag in the gathered PrgEnv arguments, then force static linking
+      // because LLVM's default (dynamic) is different from the PrgEnv
+      // default (static).
+      fLinkStyle = LS_STATIC;
+    }
     gather_prgenv += CHPL_COMM;
     gather_prgenv += "' '";
     gather_prgenv += CHPL_COMM_SUBSTRATE;
@@ -2858,9 +2870,7 @@ void makeBinaryLLVM(void) {
   std::vector<std::string> sysroot_args;
   std::string sysroot_arguments(CHPL_THIRD_PARTY);
   sysroot_arguments += "/llvm/install/";
-  sysroot_arguments += CHPL_HOST_PLATFORM;
-  sysroot_arguments += "-";
-  sysroot_arguments += CHPL_HOST_COMPILER;
+  sysroot_arguments += CHPL_LLVM_UNIQ_CFG_PATH;
   sysroot_arguments += "/configured-clang-sysroot-arguments";
 
   readArgsFromFile(sysroot_arguments, sysroot_args);
@@ -2912,8 +2922,14 @@ void makeBinaryLLVM(void) {
   // libraries are written in C++. Here we use clang++ or possibly a
   // linker override specified by the Makefiles (e.g. setting it to mpicxx)
   std::string command = useLinkCXX + " " + options + " " +
-                        moduleFilename + " " + maino +
-                        " -o " + tmpbinname;
+                        moduleFilename + " " + maino;
+  // For dynamic linking, leave it alone.  For static, append -static .
+  // See $CHPL_HOME/make/compiler/Makefile.clang (and keep this in sync
+  // with it).
+  if (fLinkStyle == LS_STATIC)
+    command += " -static";
+  command += " -o ";
+  command += tmpbinname;
   for( size_t i = 0; i < dotOFiles.size(); i++ ) {
     command += " ";
     command += dotOFiles[i];

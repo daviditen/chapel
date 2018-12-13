@@ -127,7 +127,10 @@ CallExpr* buildReduceExpr(Expr* op, Expr* data, bool zippered = false);
 CallExpr* buildScanExpr(Expr* op, Expr* data, bool zippered = false);
 
 
-BlockStmt* buildVarDecls(BlockStmt* stmts, std::set<Flag> flags, const char* docs);
+std::set<Flag>* buildVarDeclFlags(Flag flag1 = FLAG_UNKNOWN,
+                                  Flag flag2 = FLAG_UNKNOWN);
+BlockStmt* buildVarDecls(BlockStmt* stmts, const char* docs = NULL,
+                         std::set<Flag>* flags = NULL, Expr* cnameExpr = NULL);
 
 DefExpr*  buildClassDefExpr(const char*   name,
                             const char*   cname,

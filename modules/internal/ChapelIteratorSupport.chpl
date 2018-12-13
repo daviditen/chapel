@@ -301,7 +301,9 @@ module ChapelIteratorSupport {
 
   pragma "suppress lvalue error"
   pragma "fn returns iterator"
-  inline proc _getIterator(x) {
+  pragma "no borrow convert" // e.g. iteration over tuple of owned
+  // argument is const ref for e.g. for x in (someSharedThing1, someSharedThing2)
+  inline proc _getIterator(const ref x) {
     return _getIterator(x.these());
   }
 
