@@ -483,7 +483,8 @@ static FnSymbol* chpl_gen_main_exists() {
           INT_FATAL(fn, "function is not normalized");
         }
 
-        mainReturnsSomething = (sym->symbol() != gVoid);
+        mainReturnsSomething = (sym->symbol() != gVoid) &&
+                               !fn->hasFlag(FLAG_VOID_NO_RETURN_VALUE);
 
         ModuleSymbol* fnMod = fn->getModule();
 

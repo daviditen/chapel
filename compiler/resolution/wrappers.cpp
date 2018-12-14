@@ -1799,7 +1799,9 @@ static FnSymbol* buildPromotionWrapper(PromotionInfo& promotion,
   FnSymbol*  retval     = promotion.wrapperFn;
   FnSymbol*  fn         = promotion.fn;
 
-  if (fn->retType == dtVoid || fn->getReturnSymbol() == gVoid) {
+  if (fn->retType == dtVoid          ||
+      fn->getReturnSymbol() == gVoid ||
+      fn->hasFlag(FLAG_VOID_NO_RETURN_VALUE)) {
     Expr*      indices  = getIndices (promotion);
     Expr*      iterator = getIterator(promotion);
     CallExpr*  wrapCall = createPromotedCallForWrapper(promotion);
