@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -831,19 +831,41 @@ module ChapelBase {
     return ret;
   }
 
+  inline proc _ddata_sizeof_element(type t: _ddata): size_t {
+    return __primitive("sizeof_ddata_element", t):size_t;
+  }
+
+  inline proc _ddata_sizeof_element(x: _ddata): size_t {
+    return _ddata_sizeof_element(x.type);
+  }
+
   inline proc _ddata_allocate(type eltType, size: integral,
                               subloc = c_sublocid_none) {
+    pragma "insert line file info"
+      extern proc chpl_mem_array_alloc(nmemb: size_t, eltSize: size_t,
+                                       subloc: chpl_sublocID_t,
+                                       ref callPostAlloc: bool): c_void_ptr;
     var ret: _ddata(eltType);
-    var callAgain: bool;
-    __primitive("array_alloc", ret, size, subloc, c_ptrTo(callAgain), c_nil);
+    var callPostAlloc: bool;
+    ret = chpl_mem_array_alloc(size:size_t, _ddata_sizeof_element(ret),
+                               subloc, callPostAlloc):ret.type;
     init_elts(ret, size, eltType);
-    if callAgain then
-      __primitive("array_alloc", ret, size, subloc, c_nil, ret);
+    if callPostAlloc {
+      pragma "insert line file info"
+        extern proc chpl_mem_array_postAlloc(data: c_void_ptr, nmemb: size_t,
+                                             eltSize: size_t);
+      chpl_mem_array_postAlloc(ret:c_void_ptr, size:size_t,
+                               _ddata_sizeof_element(ret));
+    }
     return ret;
   }
 
   inline proc _ddata_free(data: _ddata, size: integral) {
-    __primitive("array_free", data, size);
+    pragma "insert line file info"
+      extern proc chpl_mem_array_free(data: c_void_ptr,
+                                      nmemb: size_t, eltSize: size_t);
+    chpl_mem_array_free(data:c_void_ptr, size:size_t,
+                        _ddata_sizeof_element(data));
   }
 
   inline proc ==(a: _ddata, b: _ddata) where a.eltType == b.eltType {
@@ -1136,17 +1158,14 @@ module ChapelBase {
 
   // dynamic cast handles class casting based upon runtime class type
   // this also might be called a downcast
-  pragma "unsafe"
   inline proc _cast(type t:borrowed, x:borrowed) where isSubtype(t,x.type) && (x.type != t)
     return if x != nil then __primitive("dynamic_cast", t, x) else __primitive("cast", t, nil);
 
   // this version handles unmanaged -> unmanaged
-  pragma "unsafe"
   inline proc _cast(type t:unmanaged, x:_unmanaged) where isSubtype(t,x.type) && (x.type != t)
     return if x != nil then __primitive("dynamic_cast", t, x) else __primitive("cast", t, nil);
 
   // this version handles unmanaged -> borrow
-  pragma "unsafe"
   inline proc _cast(type t:borrowed, x:_unmanaged) where isSubtype(t,_to_borrowed(x.type)) && (_to_borrowed(x.type) != t) {
     // first convert to borrow
     var casttmp = __primitive("to borrowed class", x);

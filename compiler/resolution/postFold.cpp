@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -487,8 +487,7 @@ static Expr* postFoldPrimop(CallExpr* call) {
 
     call->replace(retval);
 
-  } else if (call->isPrimitive(PRIM_ARRAY_ALLOC)                == true ||
-             strncmp(call->primitive->name, "_fscan", 6)        == 0    ||
+  } else if (strncmp(call->primitive->name, "_fscan", 6)        == 0    ||
              strcmp (call->primitive->name, "_readToEndOfLine") == 0    ||
              strcmp (call->primitive->name, "_now_timer")       == 0)   {
     for_actuals(actual, call) {

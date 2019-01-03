@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -41,7 +41,7 @@
 #include "initializerResolution.h"
 #include "initializerRules.h"
 #include "iterator.h"
-#include "UnmanagedClassType.h"
+#include "lifetime.h"
 #include "ModuleSymbol.h"
 #include "ParamForLoop.h"
 #include "PartialCopyData.h"
@@ -56,6 +56,7 @@
 #include "stringutil.h"
 #include "TryStmt.h"
 #include "typeSpecifier.h"
+#include "UnmanagedClassType.h"
 #include "view.h"
 #include "virtualDispatch.h"
 #include "visibleFunctions.h"
@@ -1159,6 +1160,7 @@ bool doCanDispatch(Type*     actualType,
     if (retval == false) {
       if (fn                              != NULL        &&
           fn->name                        != astrSequals &&
+          strcmp(fn->name, "these")       != 0           &&
           actualType->scalarPromotionType != NULL        &&
           doCanDispatch(actualType->scalarPromotionType,
                         NULL,
@@ -1933,6 +1935,8 @@ static void checkForInfiniteRecord(AggregateType* at) {
   checkForInfiniteRecord(at, nestedRecords);
 }
 
+static void markArraysOfBorrows(AggregateType* at);
+
 void resolveTypeWithInitializer(AggregateType* at, FnSymbol* fn) {
 
   if (isRecord(at)) {
@@ -1951,6 +1955,40 @@ void resolveTypeWithInitializer(AggregateType* at, FnSymbol* fn) {
   }
   if (developer == false) {
     fixTypeNames(at);
+  }
+
+  markArraysOfBorrows(at);
+}
+
+static void markArraysOfBorrows(AggregateType* at) {
+
+  AggregateType* nextAt = at;
+
+  if (isRecordWrappedType(at)) {
+    Symbol* instanceField = at->getField("_instance", false);
+
+    if (instanceField) {
+      Type* implType = canonicalClassType(instanceField->type);
+
+      if (implType != dtUnknown)
+        if (AggregateType* implAt = toAggregateType(implType))
+          nextAt = implAt;
+    }
+  }
+
+  if (isArrayClass(nextAt) && !nextAt->symbol->hasFlag(FLAG_BASE_ARRAY)) {
+    Symbol* eltTypeField = nextAt->getField("eltType", false);
+
+    if (eltTypeField) {
+      Type* eltType    = eltTypeField->type;
+
+      if (eltType != dtUnknown) {
+        if (isOrContainsBorrowedClass(eltType)) {
+          at->symbol->addFlag(FLAG_ARRAY_OF_BORROWS);
+          nextAt->symbol->addFlag(FLAG_ARRAY_OF_BORROWS);
+        }
+      }
+    }
   }
 }
 

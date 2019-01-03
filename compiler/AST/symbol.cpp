@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -1940,6 +1940,7 @@ const char* astrSgt = NULL;
 const char* astrSgte = NULL;
 const char* astrSlt = NULL;
 const char* astrSlte = NULL;
+const char* astrSswap = NULL;
 const char* astr_cast = NULL;
 const char* astr_defaultOf = NULL;
 const char* astrInit = NULL;
@@ -1961,6 +1962,7 @@ void initAstrConsts() {
   astrSgte = astr(">=");
   astrSlt = astr("<");
   astrSlte = astr("<=");
+  astrSswap = astr("<=>");
   astr_cast   = astr("_cast");
   astr_defaultOf = astr("_defaultOf");
   astrInit    = astr("init");

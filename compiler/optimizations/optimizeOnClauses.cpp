@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -126,7 +126,8 @@ classifyPrimitive(CallExpr *call) {
   case PRIM_FINISH_RMEM_FENCE:
 
   case PRIM_CAST_TO_VOID_STAR:
-  case PRIM_SIZEOF:
+  case PRIM_SIZEOF_BUNDLE:
+  case PRIM_SIZEOF_DDATA_ELEMENT:
 
   case PRIM_GET_USER_LINE:
   case PRIM_GET_USER_FILE:
@@ -261,6 +262,7 @@ classifyPrimitive(CallExpr *call) {
   case PRIM_TYPE_INIT:
 
   case PRIM_LOGICAL_FOLDER:
+  case PRIM_LIFETIME_OF:
   case PRIM_TYPEOF:
   case PRIM_STATIC_TYPEOF:
   case PRIM_SCALAR_PROMOTION_TYPE:
@@ -270,6 +272,7 @@ classifyPrimitive(CallExpr *call) {
   case PRIM_IS_RECORD_TYPE:
   case PRIM_IS_UNION_TYPE:
   case PRIM_IS_ATOMIC_TYPE:
+  case PRIM_IS_EXTERN_TYPE:
   case PRIM_IS_TUPLE_TYPE:
   case PRIM_IS_STAR_TUPLE_TYPE:
   case PRIM_IS_SUBTYPE:
@@ -343,8 +346,6 @@ classifyPrimitive(CallExpr *call) {
     // call so we don't consider them fast-eligible.
     // However, they are communication free.
     //
-  case PRIM_ARRAY_ALLOC:
-  case PRIM_ARRAY_FREE:
   case PRIM_STRING_COPY:
     return LOCAL_NOT_FAST;
 

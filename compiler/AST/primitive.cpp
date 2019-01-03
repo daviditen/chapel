@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -554,6 +554,7 @@ initPrimitive() {
   // dst, src. PRIM_MOVE can set a reference.
   prim_def(PRIM_MOVE, "move", returnInfoVoid, false);
 
+  // 1 argument: type to create a default-initialized value of
   prim_def(PRIM_INIT,       "init",       returnInfoFirstDeref);
 
   // fn->_this, the name of the field, value/type, optional declared type
@@ -676,8 +677,11 @@ initPrimitive() {
   // set serial state to true or false
   prim_def(PRIM_SET_SERIAL, "task_set_serial", returnInfoVoid, true);
 
-  // These are used for task-aware allocation.
-  prim_def(PRIM_SIZEOF, "sizeof", returnInfoSizeType);
+  // These are used for task bundles and for allocating class instances.
+  prim_def(PRIM_SIZEOF_BUNDLE, "sizeof_bundle", returnInfoSizeType);
+
+  // sizeof(_ddata.eltType)
+  prim_def(PRIM_SIZEOF_DDATA_ELEMENT, "sizeof_ddata_element", returnInfoSizeType);
 
   // initialize fields of a temporary record
   prim_def(PRIM_INIT_FIELDS, "chpl_init_record", returnInfoVoid, true);
@@ -695,10 +699,15 @@ initPrimitive() {
   prim_def(PRIM_CAST, "cast", returnInfoCast, false, true);
   prim_def(PRIM_DYNAMIC_CAST, "dynamic_cast", returnInfoCast, false);
 
+  // PRIM_LIFETIME_OF represents a query of a lifetime to inform the lifetime
+  // checker.
+  prim_def(PRIM_LIFETIME_OF, "lifetime_of", returnInfoInt64);
+
   // PRIM_TYPEOF of an array returns a runtime type (containing its domain)
   // For values without a runtime type component, it works the same as
   // PRIM_STATIC_TYPEOF
   prim_def(PRIM_TYPEOF, "typeof", returnInfoFirstDeref);
+
 
   // Return the compile-time component of a type (ignoring runtime types)
   // For an array, returns the compile-time type only.
@@ -732,8 +741,6 @@ initPrimitive() {
   prim_def(PRIM_CHPL_COMM_PUT_STRD, "chpl_comm_put_strd", returnInfoVoid, true, true);
 
   prim_def(PRIM_ARRAY_SHIFT_BASE_POINTER, "shift_base_pointer", returnInfoVoid, true);
-  prim_def(PRIM_ARRAY_ALLOC, "array_alloc", returnInfoVoid, true, true);
-  prim_def(PRIM_ARRAY_FREE, "array_free", returnInfoVoid, true, true);
 
   // PRIM_ARRAY_GET{_VALUE} arguments
   //  base pointer
@@ -870,6 +877,7 @@ initPrimitive() {
   prim_def(PRIM_IS_UNION_TYPE, "is union type", returnInfoBool);
   prim_def(PRIM_IS_ATOMIC_TYPE, "is atomic type", returnInfoBool);
   prim_def(PRIM_IS_REF_ITER_TYPE, "is ref iter type", returnInfoBool);
+  prim_def(PRIM_IS_EXTERN_TYPE, "is extern type", returnInfoBool);
 
   prim_def(PRIM_IS_POD, "is pod type", returnInfoBool);
 

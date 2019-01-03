@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -158,6 +158,7 @@ iter             return processToken(yyscanner, TITER);
 label            return processToken(yyscanner, TLABEL);
 lambda           return processToken(yyscanner, TLAMBDA);
 let              return processToken(yyscanner, TLET);
+lifetime         return processToken(yyscanner, TLIFETIME);
 local            return processToken(yyscanner, TLOCAL);
 locale           return processToken(yyscanner, TLOCALE);
 module           return processToken(yyscanner, TMODULE);

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -632,7 +632,6 @@ module ChapelLocale {
   extern var chpl_privateObjects:c_ptr(chpl_privateObject_t);
 
   pragma "no doc"
-  pragma "unsafe"
   pragma "fn returns infinite lifetime"
   // should this use pragma "local args"?
   // Why is the compiler making the objectType argument wide?

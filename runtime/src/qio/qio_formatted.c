@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  * 
  * The entirety of this work is licensed under the Apache License,
@@ -2127,7 +2127,7 @@ qioerr qio_channel_scan_int(const int threadsafe, qio_channel_t* restrict ch, vo
 
   st.base = style->base;
   st.allow_base = style->prefix_base;
-  st.allow_pos_sign = style->showplus == 1;
+  st.allow_pos_sign = 1;
   st.allow_neg_sign = issigned;
   if(style->showpoint || style->precision > 0) {
     st.allow_point = 1;

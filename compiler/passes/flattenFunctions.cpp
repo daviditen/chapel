@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -271,6 +271,8 @@ replaceVarUsesWithFormals(FnSymbol* fn, SymbolMap* vars) {
   std::vector<SymExpr*> symExprs;
 
   collectSymExprs(fn->body, symExprs);
+  if (fn->lifetimeConstraints)
+    collectSymExprs(fn->lifetimeConstraints, symExprs);
 
   form_Map(SymbolMapElem, e, *vars) {
     if (Symbol* sym = e->key) {
@@ -298,10 +300,9 @@ replaceVarUsesWithFormals(FnSymbol* fn, SymbolMap* vars) {
               }
             }
 
-            if (( (call->isPrimitive(PRIM_MOVE)        ||
-                   call->isPrimitive(PRIM_ASSIGN)      ||
-                   call->isPrimitive(PRIM_SET_MEMBER)  ||
-                   call->isPrimitive(PRIM_ARRAY_ALLOC) )
+            if (( (call->isPrimitive(PRIM_MOVE)       ||
+                   call->isPrimitive(PRIM_ASSIGN)     ||
+                   call->isPrimitive(PRIM_SET_MEMBER) )
                   && call->get(1) == se)                                   ||
                 (call->isPrimitive(PRIM_GET_MEMBER))                       ||
                 (call->isPrimitive(PRIM_GET_MEMBER_VALUE))                 ||

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -2400,14 +2400,13 @@ buildFunctionSymbol(FnSymbol*   fn,
   return fn;
 }
 
-// Called like:
-// buildFunctionDecl($4, $6, $7, $8, $9, $10, @$.comment);
 BlockStmt*
 buildFunctionDecl(FnSymbol*   fn,
                   RetTag      optRetTag,
                   Expr*       optRetType,
                   bool        optThrowsError,
                   Expr*       optWhere,
+                  Expr*       optLifetimeConstraints,
                   BlockStmt*  optFnBody,
                   const char* docs)
 {
@@ -2420,7 +2419,7 @@ buildFunctionDecl(FnSymbol*   fn,
   }
 
   if (optRetType)
-    fn->retExprType = new BlockStmt(optRetType, BLOCK_SCOPELESS);
+    fn->retExprType = new BlockStmt(optRetType, BLOCK_TYPE);
   else if (fn->hasFlag(FLAG_EXTERN))
     fn->retType     = dtVoid;
 
@@ -2438,6 +2437,11 @@ buildFunctionDecl(FnSymbol*   fn,
       USR_FATAL_CONT(fn, "Exported functions cannot have where clauses.");
 
     fn->where = new BlockStmt(optWhere);
+  }
+
+  if (optLifetimeConstraints)
+  {
+    fn->lifetimeConstraints = new BlockStmt(optLifetimeConstraints);
   }
 
   if (optFnBody)
@@ -2773,7 +2777,7 @@ buildBeginStmt(CallExpr* byref_vars, Expr* stmt) {
     addByrefVars(onBlock, byref_vars);
     return body;
   } else {
-    BlockStmt* block = buildChapelStmt();
+    BlockStmt* block = new BlockStmt();
     VarSymbol* endCount = newTempConst("_endCount");
     endCount->addFlag(FLAG_END_COUNT);
     block->insertAtTail(new DefExpr(endCount));
@@ -2831,6 +2835,7 @@ buildSyncStmt(Expr* stmt) {
   catches->insertAtTail(CatchStmt::build(defError, saveError));
 
   BlockStmt* body = toBlockStmt(stmt);
+  body->blockTag = BLOCK_NORMAL; // or at least, not scopeless
   INT_ASSERT(body);
 
   TryStmt* t = new TryStmt(/* try! */ false, body, catches,

@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -388,6 +388,7 @@ void convertDeclToChpl(ModuleSymbol* module,
                                            chpl_type, // ret type
                                            false,  // throws
                                            NULL, // where
+                                           NULL, // lifetime constraints
                                            NULL, // body
                                            NULL); // docs
 

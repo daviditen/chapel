@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -28,6 +28,8 @@ module DefaultRectangular {
   if dataParMinGranularity<=0 then halt("dataParMinGranularity must be > 0");
 
   use DSIUtil, ChapelArray;
+  use ExternalArray;
+
   config param debugDefaultDist = false;
   config param debugDefaultDistBulkTransfer = false;
   config param debugDataPar = false;
@@ -77,8 +79,10 @@ module DefaultRectangular {
   }
 
   class DefaultDist: BaseDist {
-    override proc dsiNewRectangularDom(param rank: int, type idxType, param stridable: bool, inds) {
-      const dom = new unmanaged DefaultRectangularDom(rank, idxType, stridable, _to_unmanaged(this));
+    override proc dsiNewRectangularDom(param rank: int, type idxType,
+                                       param stridable: bool, inds) {
+      const dom = new unmanaged DefaultRectangularDom(rank, idxType, stridable,
+                                                      _to_unmanaged(this));
       dom.dsiSetIndices(inds);
       return dom;
     }
@@ -118,7 +122,6 @@ module DefaultRectangular {
   pragma "locale private"
   var defaultDist = new dmap(new unmanaged DefaultDist());
 
-  pragma "unsafe"
   proc chpl_defaultDistInitPrivate() {
     if defaultDist._value==nil {
       // FIXME benharsh: Here's what we want to do:
@@ -675,8 +678,10 @@ module DefaultRectangular {
     }
 
     proc dsiBuildArray(type eltType) {
-      return new unmanaged DefaultRectangularArr(eltType=eltType, rank=rank, idxType=idxType,
-                                      stridable=stridable, dom=_to_unmanaged(this));
+      return new unmanaged DefaultRectangularArr(eltType=eltType, rank=rank,
+                                                 idxType=idxType,
+                                                 stridable=stridable,
+                                                 dom=_to_unmanaged(this));
     }
 
     proc dsiBuildArrayWith(type eltType, data:_ddata(eltType), allocSize:int) {
@@ -1014,6 +1019,11 @@ module DefaultRectangular {
     // note: used by pychapel
     var noinit_data: bool = false;
 
+    // note: used for external array support
+    var externArr: bool = false;
+    var _borrowed: bool = true;
+    var externFreeFunc: c_void_ptr;
+
     // 'dataAllocRange' is used by the array-vector operations (e.g. push_back,
     // pop_back, insert, remove) to allow growing or shrinking the data
     // buffer in a doubling/halving style.  If it is used, it will be the
@@ -1047,23 +1057,27 @@ module DefaultRectangular {
     }
 
     override proc dsiDestroyArr() {
-      if dom.dsiNumIndices > 0 || dataAllocRange.length > 0 {
-        param needsDestroy = __primitive("needs auto destroy",
-                                         __primitive("deref", data[0]));
-        if needsDestroy {
-          var numElts:intIdxType = 0;
-          // dataAllocRange may be empty or contain a meaningful value
-          if rank == 1 && !stridable then
-            numElts = dataAllocRange.length;
-          if numElts == 0 then
-            numElts = dom.dsiNumIndices;
-
-          dsiDestroyDataHelper(data, numElts);
+      if (externArr) {
+        if (!_borrowed) {
+          chpl_call_free_func(externFreeFunc, c_ptrTo(data));
         }
+      } else {
+        if dom.dsiNumIndices > 0 || dataAllocRange.length > 0 {
+          param needsDestroy = __primitive("needs auto destroy",
+                                           __primitive("deref", data[0]));
+          if needsDestroy {
+            var numElts:intIdxType = 0;
+            // dataAllocRange may be empty or contain a meaningful value
+            if rank == 1 && !stridable then
+              numElts = dataAllocRange.length;
+            if numElts == 0 then
+              numElts = dom.dsiNumIndices;
+            dsiDestroyDataHelper(data, numElts);
+          }
+        }
+        const size = blk(1) * dom.dsiDim(1).length;
+        _ddata_free(data, size);
       }
-
-      const size = blk(1) * dom.dsiDim(1).length;
-      _ddata_free(data, size);
     }
 
     inline proc theData ref {

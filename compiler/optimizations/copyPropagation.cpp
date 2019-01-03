@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -272,8 +272,7 @@ static bool needsKilling(SymExpr* se, std::set<Symbol*>& liveRefs)
     }
 
     if (call->isPrimitive(PRIM_ADDR_OF) ||
-        call->isPrimitive(PRIM_SET_REFERENCE) ||
-        call->isPrimitive(PRIM_ARRAY_ALLOC)) {
+        call->isPrimitive(PRIM_SET_REFERENCE)) {
       liveRefs.insert(se->symbol());
       return true;
     }
@@ -348,7 +347,6 @@ static bool isUse(SymExpr* se)
       }
       return true;
 
-     case PRIM_ARRAY_ALLOC:
      case PRIM_ADDR_OF:
      case PRIM_SET_REFERENCE:
       return false; // See Note #2.

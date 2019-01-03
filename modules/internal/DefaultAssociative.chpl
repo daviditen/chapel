@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  * 
  * The entirety of this work is licensed under the Apache License,
@@ -328,8 +328,7 @@ module DefaultAssociative {
     // NOTE: Calls to this routine assume that the tableLock has been acquired.
     //
 
-    // TODO - once we can annotate idx argument should outlive 'this'
-    pragma "unsafe"
+    pragma "unsafe" // see issue #11666
     proc _add(idx: idxType, in slotNum : index(tableDom) = -1) {
       var foundSlot : bool = (slotNum != -1);
       if !foundSlot then

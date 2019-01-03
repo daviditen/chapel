@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -681,6 +681,7 @@ extern const char* astrSgt;
 extern const char* astrSgte;
 extern const char* astrSlt;
 extern const char* astrSlte;
+extern const char* astrSswap;
 extern const char* astr_cast;
 extern const char* astr_defaultOf;
 extern const char* astrInit;

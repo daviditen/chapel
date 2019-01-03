@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -330,7 +330,6 @@ module ChapelArray {
     }
   }
 
-  pragma "unsafe"
   pragma "no copy return"
   proc _newArray(value) {
     if _isPrivatized(value) then
@@ -343,7 +342,6 @@ module ChapelArray {
   // It would have implications for alias analysis
   // of arrays.
 
-  pragma "unsafe"
   proc _newDomain(value) {
     if _to_unmanaged(value.type) != value.type then
       compilerError("Domain on borrow created");
@@ -364,7 +362,6 @@ module ChapelArray {
       return new _domain(nullPid, value, _unowned=true);
   }
 
-  pragma "unsafe" // value assumed to be borrow but it's ownership xfer
   proc _newDistribution(value) {
     if _isPrivatized(value) then
       return new _distribution(_newPrivatizedClass(value), value);
@@ -2883,9 +2880,7 @@ module ChapelArray {
        The array must be a rectangular 1-D array; its domain must be
        non-stridable and not shared with other arrays.
      */
-    pragma "unsafe"
-    // TODO - once we can annotate, val argument should outlive 'this'
-    proc push_back(in val: this.eltType) {
+    proc push_back(in val: this.eltType) lifetime this < val {
       if (!chpl__isDense1DArray()) then
         compilerError("push_back() is only supported on dense 1D arrays");
 
@@ -2907,9 +2902,7 @@ module ChapelArray {
        The array must be a rectangular 1-D array; its domain must be
        non-stridable and not shared with other arrays.
      */
-    pragma "unsafe"
-    // TODO - once we can annotate, vals argument should outlive 'this'
-    proc push_back(vals:_array) {
+    proc push_back(vals:_array) lifetime this < vals {
       if (!chpl__isDense1DArray()) then
         compilerError("push_back() is only supported on dense 1D arrays");
 
@@ -2985,8 +2978,7 @@ module ChapelArray {
        The array must be a rectangular 1-D array; its domain must be
        non-stridable and not shared with other arrays.
      */
-    pragma "unsafe"
-    proc push_front(in val: this.eltType) {
+    proc push_front(in val: this.eltType) lifetime this < val {
       if (!chpl__isDense1DArray()) then
         compilerError("push_front() is only supported on dense 1D arrays");
       chpl__assertSingleArrayDomain("push_front");
@@ -3003,8 +2995,7 @@ module ChapelArray {
        The array must be a rectangular 1-D array; its domain must be
        non-stridable and not shared with other arrays.
      */
-    pragma "unsafe"
-    proc push_front(vals:_array) {
+    proc push_front(vals:_array) lifetime this < vals {
       if (!chpl__isDense1DArray()) then
         compilerError("push_front() is only supported on dense 1D arrays");
 
@@ -3947,7 +3938,7 @@ module ChapelArray {
 */
 
   proc =(ref a: [], b: _tuple) where isRectangularArr(a) {
-    proc chpl__tupleInit(ref j, param rank: int, b: _tuple) {
+    proc chpl__tupleInit(ref j, param rank: int, b: _tuple) lifetime a < b {
       type idxType = a.domain.idxType,
            strType = chpl__signedType(a.domain.intIdxType);
 
@@ -4279,15 +4270,27 @@ module ChapelArray {
     type elemType = iteratorToArrayElementType(ir.type);
     var data:_ddata(elemType) = nil;
 
-    var callAgain: bool;
+    var callPostAlloc: bool;
     var subloc = c_sublocid_none;
 
     inline proc allocateData(param initialAlloc, allocSize) {
       // data allocation should match DefaultRectangular
-      if initialAlloc then
-        __primitive("array_alloc", data, allocSize, subloc, c_ptrTo(callAgain), c_nil);
-      else
-        __primitive("array_alloc", data, allocSize, subloc, c_nil, data);
+      if initialAlloc {
+        pragma "insert line file info"
+          extern proc chpl_mem_array_alloc(nmemb: size_t, eltSize: size_t,
+                                           subloc: chpl_sublocID_t,
+                                           ref callPostAlloc: bool): c_void_ptr;
+        data = chpl_mem_array_alloc(allocSize:size_t,
+                                    _ddata_sizeof_element(data),
+                                    subloc, callPostAlloc):data.type;
+
+      } else {
+        pragma "insert line file info"
+          extern proc chpl_mem_array_postAlloc(data: c_void_ptr, nmemb: size_t,
+                                               eltSize: size_t);
+        chpl_mem_array_postAlloc(data:c_void_ptr, allocSize:size_t,
+                                 _ddata_sizeof_element(data));
+      }
     }
 
     if size > 0 then allocateData(true, size);
@@ -4348,7 +4351,7 @@ module ChapelArray {
     if data != nil {
 
       // let the comm layer adjust array allocation
-      if callAgain then allocateData(false, size);
+      if callPostAlloc then allocateData(false, size);
 
       // Now construct a DefaultRectangular array using the data
       var A = D.buildArrayWith(data[0].type, data, size:int);
@@ -4370,7 +4373,7 @@ module ChapelArray {
 
       // Create space for 1 element as a placeholder.
       allocateData(true, 1);
-      if callAgain then allocateData(false, 1);
+      if callPostAlloc then allocateData(false, 1);
 
       var A = D.buildArrayWith(elemType, data, size:int);
 

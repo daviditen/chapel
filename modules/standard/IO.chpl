@@ -1,5 +1,5 @@
 /*
- * Copyright 2004-2018 Cray Inc.
+ * Copyright 2004-2019 Cray Inc.
  * Other additional copyright holders may be indicated within.
  *
  * The entirety of this work is licensed under the Apache License,
@@ -5818,6 +5818,13 @@ class _channel_regexp_info {
   }
   proc deinit() {
     clear();
+  }
+  override proc writeThis(f) {
+    f <~> "{hasRegexp = " + hasRegexp: string;
+    f <~> ", matchedRegexp = " + matchedRegexp: string;
+    f <~> ", releaseRegexp = " + releaseRegexp: string;
+    f <~> ", ... capturei = " + capturei: string;
+    f <~> ", ncaptures = " + ncaptures: string + "}";
   }
 }
 
