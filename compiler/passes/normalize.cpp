@@ -1166,6 +1166,7 @@ static void addTypeBlocksForParentTypeOf(CallExpr* call) {
 ************************************** | *************************************/
 
 static void fixupExportedArrayReturns(FnSymbol* fn);
+static void fixupVoidReturnTypes(FnSymbol* fn);
 static bool isVoidReturn(CallExpr* call);
 static bool hasGenericArrayReturn(FnSymbol* fn);
 static void insertRetMove(FnSymbol* fn, VarSymbol* retval, CallExpr* ret,
@@ -1175,6 +1176,7 @@ static void normalizeReturns(FnSymbol* fn) {
   SET_LINENO(fn);
 
   fixupExportedArrayReturns(fn);
+  fixupVoidReturnTypes(fn);
 
   std::vector<CallExpr*> rets;
   std::vector<CallExpr*> calls;
@@ -1333,6 +1335,21 @@ static void fixupExportedArrayReturns(FnSymbol* fn) {
     CallExpr* transformRet = new CallExpr("convertToExternalArray",
                                           retCall->get(1)->remove());
     retCall->insertAtTail(transformRet);
+  }
+}
+
+// For functions that are marked as having return type 'void' (gVoidVal) but
+// do not return a void value, change them to marked as 'void_t', meaning
+// returns nothing.
+static void fixupVoidReturnTypes(FnSymbol* fn) {
+  if (fn->hasFlag(FLAG_VOID_NO_RETURN_VALUE)) {
+    if (fn->retExprType != NULL) {
+      if (SymExpr* se = toSymExpr(fn->retExprType->body.only())) {
+        if (se->symbol() == dtVoidVal->symbol) {
+          se->replace(new SymExpr(dtVoid->symbol));
+        }
+      }
+    }
   }
 }
 

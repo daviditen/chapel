@@ -384,6 +384,7 @@ checkReturnPaths(FnSymbol* fn) {
       !strcmp(fn->name, "=") || // TODO: Remove this to enforce new signature.
       !strcmp(fn->name, "chpl__buildArrayRuntimeType") ||
       fn->retType == dtVoid ||
+      fn->retType == dtVoidVal ||
       fn->retTag == RET_TYPE ||
       fn->hasFlag(FLAG_EXTERN) ||
       fn->hasFlag(FLAG_INIT_TUPLE) ||

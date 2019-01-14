@@ -520,11 +520,12 @@ static VarSymbol*     createSymbol(PrimitiveType* primType, const char* name);
 // This should probably be renamed since it creates primitive types, as
 //  well as internal types and other types used in the generated code
 void initPrimitiveTypes() {
-  dtVoid                               = createInternalType ("void",     "void");
+  dtVoid                               = createInternalType("void_t", "void");
+  dtVoidVal                            = createPrimitiveType("void", "voidVal");
 
-  dtBools[BOOL_SIZE_SYS]               = createPrimitiveType("bool",     "chpl_bool");
-  dtInt[INT_SIZE_64]                   = createPrimitiveType("int",      "int64_t");
-  dtReal[FLOAT_SIZE_64]                = createPrimitiveType("real",     "_real64");
+  dtBools[BOOL_SIZE_SYS]               = createPrimitiveType("bool", "chpl_bool");
+  dtInt[INT_SIZE_64]                   = createPrimitiveType("int", "int64_t");
+  dtReal[FLOAT_SIZE_64]                = createPrimitiveType("real", "_real64");
 
   dtStringC                            = createPrimitiveType("c_string", "c_string" );
 
@@ -574,7 +575,8 @@ void initPrimitiveTypes() {
   CREATE_DEFAULT_SYMBOL (dtUnknown, gUnknown, "_gunknown");
   gUnknown->addFlag(FLAG_TYPE_VARIABLE);
 
-  CREATE_DEFAULT_SYMBOL (dtVoid, gVoid, "_void");
+  CREATE_DEFAULT_SYMBOL (dtVoid, gVoid, "_void_internal");
+  CREATE_DEFAULT_SYMBOL (dtVoidVal, gVoidVal, "_void");
 
   dtValue = createInternalType("value", "_chpl_value");
 

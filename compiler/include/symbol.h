@@ -726,6 +726,7 @@ extern Symbol *gLeaderTag, *gFollowerTag, *gStandaloneTag;
 extern Symbol *gModuleToken;
 extern Symbol *gNoInit;
 extern Symbol *gVoid;
+extern Symbol *gVoidVal;
 extern Symbol *gStringC;
 extern Symbol *gCVoidPtr;
 extern Symbol *gFile;

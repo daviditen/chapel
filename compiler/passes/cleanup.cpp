@@ -226,7 +226,7 @@ static void insertVoidReturnSymbols(CallExpr* call) {
 //
 // Mark functions with no return statements and functions with only empty
 // return statements with FLAG_VOID_NO_RETURN_VALUE. Change empty return
-// statements to return the value '_void'.
+// statements to return the value 'gVoid'.
 //
 static void fixupVoidReturnFn(FnSymbol* fn) {
   std::vector<CallExpr*> callExprs;

@@ -392,6 +392,7 @@ TYPE_EXTERN Type*             dtNumeric;
 TYPE_EXTERN PrimitiveType*    dtNil;
 TYPE_EXTERN PrimitiveType*    dtUnknown;
 TYPE_EXTERN PrimitiveType*    dtVoid;
+TYPE_EXTERN PrimitiveType*    dtVoidVal;
 TYPE_EXTERN PrimitiveType*    dtValue;
 TYPE_EXTERN PrimitiveType*    dtBorrowed;
 TYPE_EXTERN PrimitiveType*    dtUnmanaged;
