@@ -105,20 +105,10 @@ module StringCasts {
     var retVal: t;
     var isErr: bool;
     // localize the string and remove leading and trailing whitespace
-    var localX = x.localize();
+    var localX = x.localize().strip();
     const hasUnderscores = localX.find("_") != 0;
 
     if hasUnderscores {
-      localX = localX.strip();
-      // make sure the string only has one word
-      var numElements: int;
-      for localX.split() {
-        numElements += 1;
-        if numElements > 1 then break;
-      }
-      if numElements > 1 then
-        throw new owned IllegalArgumentError("bad cast from string '" + x + "' to " + t:string);
-
       // remove underscores everywhere but the first position
       if localX.length >= 2 then
         localX = localX[1] + localX[2..].replace("_", "");
