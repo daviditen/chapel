@@ -725,36 +725,52 @@ module DefaultAssociative {
     }
 
     proc dsiSerialReadWrite(f /*: channel*/) {
-      var binary = f.binary();
-      var arrayStyle = f.styleElement(QIO_STYLE_ELEMENT_ARRAY);
-      var isspace = arrayStyle == QIO_ARRAY_FORMAT_SPACE && !binary;
-      var isjson = arrayStyle == QIO_ARRAY_FORMAT_JSON && !binary;
-      var ischpl = arrayStyle == QIO_ARRAY_FORMAT_CHPL && !binary;
-
-      if !f.writing && ischpl {
-        this.readChapelStyleAssocArray(f);
-      } else {
-        if isjson || ischpl {
-          f <~> new ioLiteral("[");
-        }
-
+      if f.formatter != nil {
+        f.formatter.readWriteArrayStart(f);
         var first = true;
-
         for (key, val) in zip(this.dom, this) {
-          if first then first = false;
-          else if isspace then f <~> new ioLiteral(" ");
-          else if isjson || ischpl then f <~> new ioLiteral(", ");
+          if !first {
+            f.formatter.readWriteFieldSeparator(f);
+            first = false;
+          }
+          if f.writing {
+            f.formatter.readWriteArrayKey(f, key);
+          }
+          f.formatter.readWriteArrayElement(f, val);
+        }
+        f.formatter.readWriteArrayEnd(f);
+      } else {
+        var binary = f.binary();
+        var arrayStyle = f.styleElement(QIO_STYLE_ELEMENT_ARRAY);
+        var isspace = arrayStyle == QIO_ARRAY_FORMAT_SPACE && !binary;
+        var isjson = arrayStyle == QIO_ARRAY_FORMAT_JSON && !binary;
+        var ischpl = arrayStyle == QIO_ARRAY_FORMAT_CHPL && !binary;
 
-          if f.writing && ischpl {
-            f <~> key;
-            f <~> new ioLiteral(" => ");
+        if !f.writing && ischpl {
+          this.readChapelStyleAssocArray(f);
+        } else {
+          if isjson || ischpl {
+            f <~> new ioLiteral("[");
           }
 
-          f <~> val;
+          var first = true;
+
+          for (key, val) in zip(this.dom, this) {
+            if first then first = false;
+            else if isspace then f <~> new ioLiteral(" ");
+            else if isjson || ischpl then f <~> new ioLiteral(", ");
+
+            if f.writing && ischpl {
+              f <~> key;
+              f <~> new ioLiteral(" => ");
+            }
+
+            f <~> val;
+          }
         }
-      }
-      if isjson || ischpl {
-        f <~> new ioLiteral("]");
+        if isjson || ischpl {
+          f <~> new ioLiteral("]");
+        }
       }
     }
 

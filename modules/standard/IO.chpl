@@ -568,6 +568,75 @@ enum iostringformat {
 }
 
 
+class IOFormatter {
+  proc readWriteFieldSeparator(c)    { halt("called abstract base method"); }
+  proc readWriteArrayStart(c)        { halt("called abstract base method"); }
+  //proc readWriteArraySeparator(c)    { halt("called abstract base method"); }
+  proc readWriteArrayKey(c, key)     { halt("called abstract base method"); }
+  proc readWriteArrayElement(c, val) { halt("called abstract base method"); }
+  proc readWriteArrayEnd(c)          { halt("called abstract base method"); }
+  proc readWriteDomainStart(c)       { halt("called abstract base method"); }
+  proc readWriteDomainEnd(c)         { halt("called abstract base method"); }
+  proc readWriteTupleStart(c)        { halt("called abstract base method"); }
+  proc readWriteTupleEnd(c)          { halt("called abstract base method"); }
+  proc readWriteStringStart(c)       { halt("called abstract base method"); }
+  proc readWriteStringEnd(c)         { halt("called abstract base method"); }
+  proc readWriteRecordStart(c)       { halt("called abstract base method"); }
+  proc readWriteRecordEnd(c)         { halt("called abstract base method"); }
+  proc readWriteClassStart(c)        { halt("called abstract base method"); }
+  proc readWriteClassEnd(c)          { halt("called abstract base method"); }
+}
+
+class JSONFormatter: IOFormatter {
+  const leftSB = new ioLiteral("["),
+        rightSB = new ioLiteral("]"),
+        commaSpace = new ioLiteral(", "),
+        rightArrow = new ioLiteral(" => ");
+
+  override proc readWriteFieldSeparator(c) {
+    c <~> commaSpace;
+  }
+
+  override proc readWriteArrayStart(c) {
+    c <~> leftSB;
+  }
+  override proc readWriteArrayEnd(c) {
+    c <~> rightSB;
+  }
+/*
+  override proc readWriteArraySeparator(c) {
+    c <~> commaSpace;
+  }
+*/
+  override proc readWriteArrayKey(c, key) {
+    c <~> key <~> rightArrow;
+  }
+  override proc readWriteArrayElement(c, val) {
+    c <~> val;
+  }
+
+
+  override proc readWriteDomainStart(c) {
+  }
+  override proc readWriteDomainEnd(c) {
+  }
+  override proc readWriteTupleStart(c) {
+  }
+  override proc readWriteTupleEnd(c) {
+  }
+  override proc readWriteStringStart(c) {
+  }
+  override proc readWriteStringEnd(c) {
+  }
+  override proc readWriteRecordStart(c) {
+  }
+  override proc readWriteRecordEnd(c) {
+  }
+  override proc readWriteClassStart(c) {
+  }
+  override proc readWriteClassEnd(c) {
+  }
+}
 /*
 
   This method returns the appropriate :record:`iostyle` ``str_style`` value
@@ -1788,6 +1857,12 @@ record channel {
      channel concurrently (when `true`).
    */
   param locking:bool;
+
+  /*
+     a subtype of the IOFormatter class that will be used to handle
+     different IO formats, e.g. JSON, CSV, etc.
+   */
+  var formatter: owned IOFormatter = nil;
   pragma "no doc"
   var home:locale;
   pragma "no doc"
