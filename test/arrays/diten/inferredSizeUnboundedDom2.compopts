@@ -1,0 +1,3 @@
+-s bt=BoundedRangeType.bounded
+-s bt=BoundedRangeType.boundedLow
+-s bt=BoundedRangeType.boundedHigh

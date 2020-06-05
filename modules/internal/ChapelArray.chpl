@@ -635,6 +635,27 @@ module ChapelArray {
     return x;
   }
 
+  proc chpl__ensureDomainExpr(x, initVal) {
+    return chpl__ensureDomainExpr(x);
+  }
+
+  proc chpl__ensureDomainExpr(x, initVal) where isRange(x) {
+    if x.boundedType != BoundedRangeType.bounded && initVal.type == nothing {
+      compilerError("Arrays declared over unbounded domains must be explicitly initialized");
+    }
+
+    if x.boundedType == BoundedRangeType.boundedLow then
+      return chpl__ensureDomainExpr(x.low..#initVal.size);
+    else if x.boundedType == BoundedRangeType.boundedHigh then
+      return chpl__ensureDomainExpr(..x.high # -initVal.size);
+   else if x.boundedType == BoundedRangeType.boundedNone then
+      return initVal.domain;
+    else if x.boundedType == BoundedRangeType.bounded then
+      return chpl__ensureDomainExpr(x);
+    else
+      compilerError("Unknown boundedType");
+  }
+
   // pragma is a workaround for ref-pair vs generic/specific overload resolution
   pragma "compiler generated"
   pragma "last resort"

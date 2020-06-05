@@ -51,6 +51,8 @@ static void applyAtomicTypeToPrimaryMethod(TypeSymbol* ts, FnSymbol* fn);
 
 static void fixupVoidReturnFn(FnSymbol* fn);
 
+static void boundUnboundedArrays(DefExpr* def);
+
 void cleanup() {
   std::vector<ModuleSymbol*> mods;
 
@@ -110,7 +112,10 @@ static void cleanup(ModuleSymbol* module) {
         }
 
         fixupVoidReturnFn(fn);
+      } else if (VarSymbol* var = toVarSymbol(def->sym)) {
+        boundUnboundedArrays(def);
       }
+
     } else if (CatchStmt* catchStmt = toCatchStmt(ast)) {
       catchStmt->cleanup();
     } else if (ArgSymbol* arg = toArgSymbol(ast)) {
@@ -283,3 +288,35 @@ static void applyAtomicTypeToPrimaryMethod(TypeSymbol* ts, FnSymbol* fn) {
     fn->addFlag(FLAG_ATOMIC_TYPE);
   }
 }
+
+// For arrays declared over unbounded domains use the initializer expression
+// combined with any available bounds in the domain to fully bound the domain.
+// If there is no initializer expression issue an error.
+static void boundUnboundedArrays(DefExpr* def) {
+  if (CallExpr* exprType = toCallExpr(def->exprType)) {
+    if (exprType->isNamed("chpl__buildArrayRuntimeType") &&
+        exprType->argList.length > 0) {
+      if (CallExpr* domainCall = toCallExpr(exprType->get(1))) {
+        if (domainCall->isNamed("chpl__ensureDomainExpr")) {
+          if (def->init) {
+            Expr* init = def->init->remove();
+            VarSymbol* initTemp = newTemp("initTemp");
+            def->insertBefore(new DefExpr(initTemp));
+            CallExpr* tempMove = new CallExpr(PRIM_MOVE, initTemp, init);
+            def->insertBefore(tempMove);
+            def->init = new SymExpr(initTemp);
+            domainCall->insertAtTail(new SymExpr(initTemp));
+            // remove and re-insert the DefExpr to update parentExpr links
+            def->remove();
+            tempMove->insertAfter(def);
+          } else {
+            // Issue a compiler error if the domain is unbounded and there
+            // is no init expression.
+            domainCall->insertAtTail(gNone);
+          }
+        }
+      }
+    }
+  }
+}
+

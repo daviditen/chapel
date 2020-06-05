@@ -1,0 +1,1 @@
+unboundedArrayNoInit.chpl:1: error: Arrays declared over unbounded domains must be explicitly initialized
