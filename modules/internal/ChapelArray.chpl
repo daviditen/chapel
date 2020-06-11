@@ -635,7 +635,7 @@ module ChapelArray {
     return x;
   }
 
-  proc chpl__wrapEnsureDomainExpr(x..., initVal) where !isRange(x(0)) {
+  proc chpl__wrapEnsureDomainExpr(x..., initVal) const ref where !isRange(x(0)) {
     return chpl__ensureDomainExpr((...x));
   }
 
