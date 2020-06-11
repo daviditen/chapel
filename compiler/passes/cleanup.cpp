@@ -301,18 +301,20 @@ static void boundUnboundedArrays(DefExpr* def) {
           if (def->init) {
             Expr* init = def->init->remove();
             VarSymbol* initTemp = newTemp("initTemp");
-            def->insertBefore(new DefExpr(initTemp));
-            CallExpr* tempMove = new CallExpr(PRIM_MOVE, initTemp, init);
-            def->insertBefore(tempMove);
+            DefExpr* initDef = new DefExpr(initTemp, init);
+            def->insertBefore(initDef);
             def->init = new SymExpr(initTemp);
             domainCall->insertAtTail(new SymExpr(initTemp));
+            domainCall->baseExpr->replace(new UnresolvedSymExpr("chpl__wrapEnsureDomainExpr"));
             // remove and re-insert the DefExpr to update parentExpr links
             def->remove();
-            tempMove->insertAfter(def);
+            initDef->insertAfter(def);
           } else {
-            // Issue a compiler error if the domain is unbounded and there
-            // is no init expression.
+            // Issue a compiler error in the chpl__wrapEnsureDomainExpr
+            // function if the domain is unbounded and there is no init
+            // expression.
             domainCall->insertAtTail(gNone);
+            domainCall->baseExpr->replace(new UnresolvedSymExpr("chpl__wrapEnsureDomainExpr"));
           }
         }
       }

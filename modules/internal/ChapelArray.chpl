@@ -635,23 +635,28 @@ module ChapelArray {
     return x;
   }
 
-  proc chpl__ensureDomainExpr(x, initVal) {
-    return chpl__ensureDomainExpr(x);
+  proc chpl__wrapEnsureDomainExpr(x..., initVal) where !isRange(x(0)) {
+    return chpl__ensureDomainExpr((...x));
   }
 
-  proc chpl__ensureDomainExpr(x, initVal) where isRange(x) {
-    if x.boundedType != BoundedRangeType.bounded && initVal.type == nothing {
+  proc chpl__wrapEnsureDomainExpr(x..., initVal) where isRange(x(0)) {
+    param bt = x(0).boundedType;
+    if bt != BoundedRangeType.bounded && initVal.type == nothing {
       compilerError("Arrays declared over unbounded domains must be explicitly initialized");
     }
 
-    if x.boundedType == BoundedRangeType.boundedLow then
-      return chpl__ensureDomainExpr(x.low..#initVal.size);
-    else if x.boundedType == BoundedRangeType.boundedHigh then
-      return chpl__ensureDomainExpr(..x.high # -initVal.size);
-   else if x.boundedType == BoundedRangeType.boundedNone then
+    if bt != BoundedRangeType.bounded && x.size != 1 {
+      compilerError("Multidimensional arrays declared over unbounded domains are not supported");
+    }
+
+    if bt == BoundedRangeType.boundedLow then
+      return chpl__ensureDomainExpr(x(0).low..#initVal.size);
+    else if bt == BoundedRangeType.boundedHigh then
+      return chpl__ensureDomainExpr(..x(0).high # -initVal.size);
+   else if bt == BoundedRangeType.boundedNone then
       return initVal.domain;
-    else if x.boundedType == BoundedRangeType.bounded then
-      return chpl__ensureDomainExpr(x);
+    else if bt == BoundedRangeType.bounded then
+      return chpl__ensureDomainExpr((...x));
     else
       compilerError("Unknown boundedType");
   }
