@@ -3828,8 +3828,6 @@ static void resolveNormalCallFinalChecks(CallExpr* call) {
     }
   }
 
-  lvalueCheck(call);
-
   checkForStoringIntoTuple(call, fn);
 
   checkDefaultNonnilableArrayArg(call, fn);
@@ -5876,7 +5874,7 @@ void lvalueCheck(CallExpr* call) {
   // Check to ensure the actual supplied to an OUT, INOUT or REF argument
   // is an lvalue.
   for_formals_actuals(formal, actual, call) {
-    lvalueCheckActual(call, actual, formal->intent, formal);
+    lvalueCheckActual(call, actual, formal->originalIntent, formal);
   }
 }
 

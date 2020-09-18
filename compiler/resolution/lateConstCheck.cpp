@@ -635,6 +635,8 @@ void lateConstCheck(std::map<BaseAST*, BaseAST*> * reasonNotConst) {
       const char* calleeParens = (isalpha(cn1) || cn1 == '_') ? "()" : "";
       int formalIdx = 0;
 
+      lvalueCheck(call);
+
       // Run checks for tuple formals that are not REF/IF-MODIFIED once.
       if (!visitedFunctions.count(calledFn)) {
         visitedFunctions.insert(calledFn);
