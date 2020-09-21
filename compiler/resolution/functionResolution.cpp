@@ -6022,8 +6022,13 @@ static void lvalueCheckActual(CallExpr* call, Expr* actual, IntentTag intent, Ar
         }
       }
 
+      // When lvalue checking is run outside function resolution
+      // the callStack is always empty.
+      INT_ASSERT(callStack.n == 0);
+
+      // When run during function resolution, this assert should hold instead.
       // This assert is FYI. Perhaps can remove it if it fails.
-      INT_ASSERT(callStack.n > 0 && callStack.v[callStack.n - 1] == call);
+      //INT_ASSERT(callStack.n > 0 && callStack.v[callStack.n - 1] == call);
 
       FnSymbol*   fnParent   = toFnSymbol(call->parentSymbol);
       const char* recordName = defaultRecordAssignmentTo(fnParent);

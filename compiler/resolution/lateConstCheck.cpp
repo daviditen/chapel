@@ -625,6 +625,15 @@ void lateConstCheck(std::map<BaseAST*, BaseAST*> * reasonNotConst) {
   std::set<FnSymbol*> visitedFunctions;
 
   forv_Vec(CallExpr, call, gCallExprs) {
+    if (call->parentExpr == NULL)
+      continue;
+    if (FnSymbol* calledFn = call->resolvedFunction()) {
+      lvalueCheck(call);
+    }
+  }
+  USR_STOP();
+
+  forv_Vec(CallExpr, call, gCallExprs) {
 
     // Ignore calls removed earlier by this pass.
     if (call->parentExpr == NULL)
@@ -634,8 +643,6 @@ void lateConstCheck(std::map<BaseAST*, BaseAST*> * reasonNotConst) {
       char        cn1          = calledFn->name[0];
       const char* calleeParens = (isalpha(cn1) || cn1 == '_') ? "()" : "";
       int formalIdx = 0;
-
-      lvalueCheck(call);
 
       // Run checks for tuple formals that are not REF/IF-MODIFIED once.
       if (!visitedFunctions.count(calledFn)) {
