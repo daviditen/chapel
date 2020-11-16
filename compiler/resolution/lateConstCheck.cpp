@@ -625,15 +625,6 @@ void lateConstCheck(std::map<BaseAST*, BaseAST*> * reasonNotConst) {
   std::set<FnSymbol*> visitedFunctions;
 
   forv_Vec(CallExpr, call, gCallExprs) {
-    if (call->parentExpr == NULL)
-      continue;
-    if (FnSymbol* calledFn = call->resolvedFunction()) {
-      lvalueCheck(call);
-    }
-  }
-  USR_STOP();
-
-  forv_Vec(CallExpr, call, gCallExprs) {
 
     // Ignore calls removed earlier by this pass.
     if (call->parentExpr == NULL)
@@ -849,4 +840,15 @@ void lateConstCheck(std::map<BaseAST*, BaseAST*> * reasonNotConst) {
       }
     }
   }
+
+  if (!fatalErrorsEncountered()) {
+    forv_Vec(CallExpr, call, gCallExprs) {
+      if (call->parentExpr == NULL)
+        continue;
+      if (FnSymbol* calledFn = call->resolvedFunction()) {
+        lvalueCheck(call);
+      }
+    }
+  }
+
 }
