@@ -1,3 +1,5 @@
+.. default-domain:: chpl
+
 .. _Chapter-Interoperability:
 
 Interoperability
@@ -60,7 +62,7 @@ An external procedure declaration has the following syntax:
 .. code-block:: syntax
 
    external-procedure-declaration-statement:
-     `extern' external-name[OPT] `proc' function-name argument-list return-intent[OPT] return-type[OPT]
+     'extern' external-name[OPT] 'proc' function-name argument-list return-intent[OPT] return-type[OPT]
 
 Chapel code will call the external function using the parameter types
 supplied in the ``extern`` declaration. Therefore, in general, the type
@@ -138,7 +140,7 @@ An exported procedure declaration has the following syntax:
 .. code-block:: syntax
 
    exported-procedure-declaration-statement:
-     `export' external-name[OPT] `proc' function-name argument-list return-intent[OPT] return-type[OPT]
+     'export' external-name[OPT] 'proc' function-name argument-list return-intent[OPT] return-type[OPT]
        function-body
 
    external-name:
@@ -241,7 +243,7 @@ declaration with the following syntax.
 .. code-block:: syntax
 
    external-type-alias-declaration-statement:
-     `extern' `type' type-alias-declaration-list ;
+     'extern' 'type' type-alias-declaration-list ;
 
 In each ``type-alias-declaration``, if the ``type-expression`` part is
 supplied, then Chapel uses the supplied type specifier internally.
@@ -273,7 +275,7 @@ Chapel ``record`` definition with the ``extern`` keyword.
 .. code-block:: syntax
 
    external-record-declaration-statement:
-     `extern' external-name[OPT] simple-record-declaration-statement
+     'extern' external-name[OPT] simple-record-declaration-statement
 
 For example, consider an external C structure defined in ``foo.h``
 called ``fltdbl``. 
@@ -532,8 +534,6 @@ Chapel  C
 ======= =======
 T       const T
 in T    T
-inout T T\*
-out T   T\*
 ref T   T\*
 param  
 type    char\*
@@ -542,8 +542,8 @@ type    char\*
 Currently, ``param`` arguments are not allowed in an extern function
 declaration, and ``type`` args are passed as a string containing the
 name of the actual type being passed. Note that the level of indirection
-is changed when passing arguments to a C function using ``inout``,
-``out``, or ``ref`` intent. The C code implementing that function must
+is changed when passing arguments to a C function using
+the ``ref`` intent. The C code implementing that function must
 dereference the argument to extract its value.
 
 .. [4]

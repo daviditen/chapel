@@ -1,3 +1,5 @@
+.. default-domain:: chpl
+
 .. _Chapter-Task_Parallelism_and_Synchronization:
 
 Task Parallelism and Synchronization
@@ -27,6 +29,7 @@ details task parallelism as follows:
 -  :ref:`Task_Intents` specifies how variables from outer scopes
    are handled within ``begin``, ``cobegin`` and ``coforall``
    statements.
+   :ref:`Task_Private_Variables` are also available.
 
 -  :ref:`Sync_Statement` describes the sync statement, a
    structured way to control parallelism.
@@ -85,7 +88,7 @@ for the begin statement is given by
 .. code-block:: syntax
 
    begin-statement:
-     `begin' task-intent-clause[OPT] statement
+     'begin' task-intent-clause[OPT] statement
 
 Control continues concurrently with the statement following the begin
 statement.
@@ -184,10 +187,10 @@ by the following syntax:
 .. code-block:: syntax
 
    sync-type:
-     `sync' type-expression
+     'sync' type-expression
 
    single-type:
-     `single' type-expression
+     'single' type-expression
 
 A default-initialized synchronization variable will be empty. A
 synchronization variable initialized from another expression will be
@@ -528,7 +531,7 @@ following syntax:
 .. code-block:: syntax
 
    atomic-type:
-     `atomic' type-expression
+     'atomic' type-expression
 
 .. _Functions_on_Atomic_Variables:
 
@@ -693,7 +696,7 @@ The ``cobegin`` statement syntax is
 .. code-block:: syntax
 
    cobegin-statement:
-     `cobegin' task-intent-clause[OPT] block-statement
+     'cobegin' task-intent-clause[OPT] block-statement
 
 A new task and a corresponding task function are created for each
 statement in the ``block-statement``. Control continues when all of the
@@ -754,10 +757,10 @@ The syntax for the coforall loop is given by
 .. code-block:: syntax
 
    coforall-statement:
-     `coforall' index-var-declaration `in' iteratable-expression task-intent-clause[OPT] `do' statement
-     `coforall' index-var-declaration `in' iteratable-expression task-intent-clause[OPT] block-statement
-     `coforall' iteratable-expression task-intent-clause[OPT] `do' statement
-     `coforall' iteratable-expression task-intent-clause[OPT] block-statement
+     'coforall' index-var-declaration 'in' iteratable-expression task-intent-clause[OPT] 'do' statement
+     'coforall' index-var-declaration 'in' iteratable-expression task-intent-clause[OPT] block-statement
+     'coforall' iteratable-expression task-intent-clause[OPT] 'do' statement
+     'coforall' iteratable-expression task-intent-clause[OPT] block-statement
 
 The ``coforall`` loop creates a separate task for each iteration of the
 loop. Control continues with the statement following the ``coforall``
@@ -829,14 +832,15 @@ Task Intents
 
 If a variable is referenced within the lexical scope of a ``begin``,
 ``cobegin``, or ``coforall`` statement and is declared outside that
-statement, it is subject to *task intents*. That is, it is considered to
+statement, it is subject to *task intents*. That is, this *outer variable*
+is considered to
 be passed as an actual argument to the corresponding task function at
 task creation time. All references to the variable within the task
 function implicitly refer to a *shadow variable*, i.e. the task
 function’s corresponding formal argument.
 
 When the task construct is inside a method on a record and accesses a
-field of ``this``, the field is treated as a regular variable. That is,
+field of ``this``, the field itself is treated as an outer variable. That is,
 it is passed as an actual argument to the task function and all
 references to the field within the task function implicitly refer to the
 corresponding shadow variable.
@@ -860,7 +864,7 @@ The syntax of the task intent clause is:
 .. code-block:: syntax
 
    task-intent-clause:
-     `with' ( task-intent-list )
+     'with' ( task-intent-list )
 
    task-intent-list:
      task-intent-item
@@ -868,16 +872,34 @@ The syntax of the task intent clause is:
 
    task-intent-item:
      formal-intent identifier
+     reduce-scan-operator 'reduce' identifier
+     class-type 'reduce' identifier
      task-private-var-decl
 
-| where the following intents can be used as a ``formal-intent``:
-  ``ref``, ``in``, ``const``, ``const in``, ``const ref``.
-  ``task-private-var-decl`` is defined in
-  :ref:`Task_Private_Variables`. In addition,
-  ``task-intent-item`` may define a ``reduce`` intent. Reduce intents
-  are described in the *Reduce Intents* technical note in the online
-  documentation:
-| https://chapel-lang.org/docs/technotes/reduceIntents.html
+where the following intents can be used as a ``formal-intent``:
+``ref``, ``in``, ``const``, ``const in``, ``const ref``.
+``task-private-var-decl`` is defined in :ref:`Task_Private_Variables`.
+
+The ``reduce`` task intent specifies a reduction into the outer variable,
+which is provided to the right of the ``reduce`` keyword.
+The reduction operator is specified by either the ``reduce-scan-operator``
+or the ``class-type`` in the same way as for a Reduction Expressions
+(see :ref:`reduce`). At the start of each task the corresponding shadow
+variable is initialized to the identity value of the reduction operator.
+Within the task it behaves as a regular variable. In addition, it can be
+the left-hand side of the ``reduce=`` operator, which accumulates its
+right-hand side onto the shadow variable.
+At the end of each task its shadow variable is combined into the outer
+variable.
+
+   *Open issue*.
+
+   How should ``reduce`` task intent be defined for ``begin`` tasks?
+   A reduction is legal only when the task completes before the program
+   has exited the dynamic scope of the outer variable.
+
+   Reduce intents are currently work-in-progress. See also
+   :ref:`Reduce Intents technical note <readme-reduceIntents>`.
 
 The implicit treatment of outer scope variables as the task function’s
 formal arguments applies to both module level and local variables. It
@@ -977,8 +999,8 @@ from within a statement. The syntax for the sync statement is given by
 .. code-block:: syntax
 
    sync-statement:
-     `sync' statement
-     `sync' block-statement
+     'sync' statement
+     'sync' block-statement
 
 Return statements are not allowed in sync statement blocks. Yield
 statement may only be lexically enclosed in sync statement blocks in
@@ -1064,8 +1086,8 @@ The syntax is:
 .. code-block:: syntax
 
    serial-statement:
-     `serial' expression[OPT] `do' statement
-     `serial' expression[OPT] block-statement
+     'serial' expression[OPT] 'do' statement
+     'serial' expression[OPT] block-statement
 
 where the optional ``expression`` evaluates to a boolean value. If the
 expression is omitted, it is as though ’true’ were specified. Whatever
@@ -1206,7 +1228,7 @@ The syntax for the atomic statement is given by:
 .. code-block:: syntax
 
    atomic-statement:
-     `atomic' statement
+     'atomic' statement
 
 ..
 

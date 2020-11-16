@@ -115,7 +115,7 @@ proc masonTest(args: [] string) throws {
 
   getRuntimeComm();
   try! {
-    const cwd = getEnv("PWD");
+    const cwd = here.cwd();
     const projectHome = getProjectHome(cwd);
 
     if(!searchSubStrings.isEmpty())
@@ -204,7 +204,7 @@ private proc runTests(show: bool, run: bool, parallel: bool, ref cmdLineCompopts
 
   try! {
 
-    const cwd = getEnv("PWD");
+    const cwd = here.cwd();
     const projectHome = getProjectHome(cwd);
 
     // parse lockfile
@@ -319,7 +319,7 @@ private proc runTestBinary(projectHome: string, outputLoc: string, testName: str
       erroredTestNames: list(string),
       testsPassed: list(string),
       skippedTestNames: list(string);
-  var localesCountMap: map(int, int, parSafe=true);
+  var localesCountMap: map(int, int, parSafe=false);
   const exitCode = runAndLog(command, testName+".chpl", result, numLocales, testsPassed,
             testNames, localesCountMap, failedTestNames, erroredTestNames, skippedTestNames, show);
   if exitCode != 0 {
@@ -339,7 +339,7 @@ private proc runTestBinary(projectHome: string, outputLoc: string, testName: str
 private proc runTestBinaries(projectHome: string, testNames: list(string),
                             ref result, show: bool) {
 
-  const cwd = getEnv("PWD");
+  const cwd = here.cwd();
   for test in testNames {
     var testTemp: string = test;
     if cwd == projectHome && customTest {
@@ -427,8 +427,15 @@ proc getTestPath(fullPath: string, testPath = "") : string {
 /* Gets the comm */
 proc getRuntimeComm() throws {
   var line: string;
-  var checkComm = spawn(["python",CHPL_HOME:string+"/util/chplenv/chpl_comm.py"],
-                      stdout = PIPE);
+  var python: string;
+  var findPython = spawn([CHPL_HOME:string+"/util/config/find-python.sh"],
+                         stdout = PIPE);
+  while findPython.stdout.readline(line) {
+    python = line.strip();
+  }
+
+  var checkComm = spawn([python, CHPL_HOME:string+"/util/chplenv/chpl_comm.py"],
+                        stdout = PIPE);
   while checkComm.stdout.readline(line) {
     comm = line.strip();
   }
@@ -527,7 +534,7 @@ proc testFile(file, ref result, show: bool) throws {
         erroredTestNames: list(string),
         testsPassed: list(string),
         skippedTestNames: list(string);
-    var localesCountMap: map(int, int, parSafe=true);
+    var localesCountMap: map(int, int, parSafe=false);
     const exitCode = runAndLog("./"+executable, fileName, result, numLocales, testsPassed,
               testNames, localesCountMap, failedTestNames, erroredTestNames, skippedTestNames, show);
     if exitCode != 0 {

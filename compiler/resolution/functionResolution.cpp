@@ -3420,7 +3420,7 @@ static FnSymbol* resolveNormalCall(CallInfo& info, check_state_t checkState) {
   ResolutionCandidate*      bestCref   = NULL;
   ResolutionCandidate*      bestVal    = NULL;
 
-  VisibilityInfo            visInfo(info.call);
+  VisibilityInfo            visInfo(info);
   int                       numMatches = 0;
 
   FnSymbol*                 retval     = NULL;
@@ -3430,7 +3430,7 @@ static FnSymbol* resolveNormalCall(CallInfo& info, check_state_t checkState) {
   numMatches = disambiguateByMatch(info, candidates,
                                    bestRef, bestCref, bestVal);
 
-  if (checkState == CHECK_NORMAL_CALL && visInfo.inPOI())
+  if (checkState == CHECK_NORMAL_CALL && numMatches > 0 && visInfo.inPOI())
     updateCacheInfosForACall(visInfo,
                              bestRef, bestCref, bestVal);
 
@@ -6357,8 +6357,9 @@ static void resolveInitField(CallExpr* call) {
   Symbol* fs = NULL;
   int index = 1;
   for_fields(field, ct) {
-    if (!strcmp(field->name, name)) {
-      fs = field; break;
+    if (field->name == name) {
+      fs = field;
+      break;
     }
     index++;
   }
@@ -6415,8 +6416,7 @@ static void resolveInitField(CallExpr* call) {
     if ((fs->hasFlag(FLAG_TYPE_VARIABLE) && isTypeExpr(srcExpr)) ||
         fs->hasFlag(FLAG_PARAM) ||
         (fs->defPoint->exprType == NULL && fs->defPoint->init == NULL) ||
-        (fs->defPoint->init == NULL && fs->defPoint->exprType != NULL &&
-         ct->fieldIsGeneric(fs, ignoredHasDefault))) {
+        ct->fieldIsGeneric(fs, ignoredHasDefault)) {
       Expr* insnPt = call->getFunction()->instantiationPoint();
       AggregateType* instantiate = ct->getInstantiation(srcSym, index, insnPt);
       if (instantiate != ct) {
@@ -6435,15 +6435,54 @@ static void resolveInitField(CallExpr* call) {
       }
     } else {
       // The field is not generic.
-
       if (fs->defPoint->exprType == NULL) {
         fs->type = srcType;
       } else if (fs->defPoint->exprType) {
         Type* exprType = fs->defPoint->exprType->typeInfo();
-        if (exprType == dtUnknown)
+        if (exprType == dtUnknown) {
           fs->type = srcType;
-        else
-          fs->type = exprType;
+        } else {
+          // Try calling resolveGenericActuals in case the field is e.g. range
+          CallExpr* dummyCall = new CallExpr(PRIM_NOOP,
+                                             new SymExpr(exprType->symbol));
+          call->insertBefore(dummyCall);
+          resolveGenericActuals(dummyCall);
+          fs->type = dummyCall->get(1)->typeInfo();
+          dummyCall->remove();
+        }
+      }
+    }
+  }
+
+  if (fs->type->getValType() != srcType->getValType()) {
+    USR_FATAL_CONT(call, "Cannot replace an instantiated field "
+                         "with another type");
+    USR_PRINT(call, "field '%s' has type '%s' but is set to '%s'",
+                     fs->name,
+                     toString(fs->getValType()),
+                     toString(srcType->getValType()));
+    USR_STOP();
+  }
+  if (fs->isParameter() && srcSym->isParameter()) {
+    Symbol* dstParam = fs;
+    Symbol* srcParam = srcSym;
+    if (Symbol* s = paramMap.get(dstParam))
+      dstParam = s;
+    if (Symbol* s = paramMap.get(srcParam))
+      srcParam = s;
+
+    if (Immediate* srcImm = getSymbolImmediate(srcParam)) {
+      if (Immediate* dstImm = getSymbolImmediate(dstParam)) {
+        if (srcImm != dstImm) {
+          USR_FATAL_CONT(call, "Cannot replace an instantiated param field "
+                               "with another value");
+          VarSymbol* dstVar = toVarSymbol(dstParam);
+          VarSymbol* srcVar = toVarSymbol(srcParam);
+          if (dstVar != NULL && srcVar != NULL)
+            USR_PRINT(call, "field '%s' has value '%s' but is set to '%s'",
+                            fs->name, toString(dstVar), toString(srcVar));
+          USR_STOP();
+        }
       }
     }
   }
@@ -7951,21 +7990,15 @@ static void resolveCoerce(CallExpr* call) {
 *                                                                             *
 ************************************** | *************************************/
 
-static Type* resolveGenericActual(SymExpr* se, bool decayToBorrow, bool resolvePartials = false);
-static Type* resolveGenericActual(SymExpr* se, Type* type, bool decayToBorrow);
+static Type* resolveGenericActual(SymExpr* se, bool resolvePartials = false);
+static Type* resolveGenericActual(SymExpr* se, Type* type);
 
 Type* resolveDefaultGenericTypeSymExpr(SymExpr* se) {
-  return resolveGenericActual(se, false, true);
+  return resolveGenericActual(se, /* resolvePartials */ true);
 }
 
 void resolveGenericActuals(CallExpr* call) {
   SET_LINENO(call);
-
-  bool decayToBorrow = false;
-  if (SymExpr* baseSe = toSymExpr(call->baseExpr))
-    if (TypeSymbol* ts = toTypeSymbol(baseSe->symbol()))
-      if (isManagedPtrType(ts->type))
-        decayToBorrow = true;
 
   for_actuals(actual, call) {
     Expr* safeActual = actual;
@@ -7975,16 +8008,16 @@ void resolveGenericActuals(CallExpr* call) {
     }
 
     if (SymExpr*   se = toSymExpr(safeActual))   {
-      resolveGenericActual(se, decayToBorrow);
+      resolveGenericActual(se);
     }
   }
 }
 
-static Type* resolveGenericActual(SymExpr* se, bool decayToBorrow, bool resolvePartials) {
+static Type* resolveGenericActual(SymExpr* se, bool resolvePartials) {
   Type* retval = se->typeInfo();
 
   if (TypeSymbol* ts = toTypeSymbol(se->symbol())) {
-    retval = resolveGenericActual(se, ts->type, decayToBorrow);
+    retval = resolveGenericActual(se, ts->type);
 
   } else if (VarSymbol* vs = toVarSymbol(se->symbol())) {
     if (vs->hasFlag(FLAG_TYPE_VARIABLE) == true) {
@@ -7993,7 +8026,6 @@ static Type* resolveGenericActual(SymExpr* se, bool decayToBorrow, bool resolveP
       //   extern var x: c_ptr(c_int);
       if ((vs->hasFlag(FLAG_EXTERN) == true || isGlobal(vs)) &&
           vs->defPoint             != NULL &&
-          vs->defPoint->init       != NULL &&
           vs->getValType()         == dtUnknown ) {
         vs->type = resolveTypeAlias(se);
       }
@@ -8008,7 +8040,7 @@ static Type* resolveGenericActual(SymExpr* se, bool decayToBorrow, bool resolveP
   return retval;
 }
 
-static Type* resolveGenericActual(SymExpr* se, Type* type, bool decayToBorrow) {
+static Type* resolveGenericActual(SymExpr* se, Type* type) {
   Type* retval = se->typeInfo();
 
   ClassTypeDecorator decorator = CLASS_TYPE_BORROWED_NONNIL;
@@ -8018,12 +8050,6 @@ static Type* resolveGenericActual(SymExpr* se, Type* type, bool decayToBorrow) {
     decorator = dt->getDecorator();
     if (isDecoratorUnknownManagement(decorator))
       isDecoratedGeneric = true;
-    if (decayToBorrow) {
-      if (isDecoratorNilable(decorator))
-        decorator = CLASS_TYPE_BORROWED_NILABLE;
-      else
-        decorator = CLASS_TYPE_BORROWED_NONNIL;
-    }
   }
 
   if (AggregateType* at = toAggregateType(type)) {
@@ -8179,9 +8205,22 @@ Type* resolveTypeAlias(SymExpr* se) {
     } else if (VarSymbol* var = toVarSymbol(se->symbol())) {
       SET_LINENO(var->defPoint);
 
-      DefExpr* def      = var->defPoint;
-      Expr*    typeExpr = resolveTypeOrParamExpr(def->init);
-      SymExpr* tse      = toSymExpr(typeExpr);
+      DefExpr* def = var->defPoint;
+      SymExpr* tse = NULL;
+
+      if (def->init != NULL) {
+        tse = toSymExpr(resolveTypeOrParamExpr(def->init));
+      } else if (SymExpr* singleDef = var->getSingleDef()) {
+        // Figure out the RHS of the singleDef, assuming it is in a PRIM_MOVE.
+        if (CallExpr* call = toCallExpr(singleDef->parentExpr))
+          if (call->isPrimitive(PRIM_MOVE))
+            if (call->get(1) == singleDef)
+              tse = toSymExpr(resolveTypeOrParamExpr(call->get(2)));
+      }
+
+      if (tse == NULL) {
+        INT_FATAL("unsupported case in resolveTypeAlias");
+      }
 
       retval = resolveTypeAlias(tse);
     }
@@ -10927,6 +10966,13 @@ static CallExpr* createGenericRecordVarDefaultInitCall(Symbol* val,
       resolveExpr(tempCall->get(2));
       resolveExpr(tempCall);
       appendExpr = new SymExpr(temp);
+
+    } else if (isGenericField && hasDefault == true) {
+      USR_FATAL_CONT(call, "this default-initialization is not yet supported");
+      USR_PRINT(field, "field '%s' is declared with a generic type "
+                       "and also a default value",
+                       field->name);
+      USR_STOP();
 
     } else {
       INT_FATAL("Unhandled case for default-init");

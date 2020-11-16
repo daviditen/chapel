@@ -38,10 +38,12 @@ static VarSymbol *addFieldAccess(Symbol *receiver, const char *fieldName,
                                  Expr *insBefore, Expr *&insAfter,
                                  bool asRef);
 static Expr *getNextExprOrCreateNoop(Expr *baseExpr, bool &createdNoop);
-static void setDefinedConstForDomainSymbol(Symbol *domainSym, Expr *nextExpr,
-                                           Expr *anchor, Symbol *isConst);
 static void setDefinedConstForDomainField(Symbol *thisSym, Symbol *fieldSym,
                                           Expr *nextExpr, Symbol *isConst);
+static void setDefinedConstForDomainSymbol(Symbol *domainSym,
+                                           Expr *insBeforeMarker,
+                                           Expr *&insAfterMarker,
+                                           Symbol *isConst);
 
 // tries to determine if the DefExpr looks like a constant domain definition,
 // and changes pertinent arguments in the CallExprs as necessary
@@ -90,7 +92,6 @@ void setDefinedConstForPrimSetMemberIfApplicable(CallExpr *call) {
   if (createdNoop) {
     nextExpr->remove();
   }
-
 }
 
 // go through all PRIM_SET_MEMBER in an initializer, and adjust them if needed
@@ -145,8 +146,7 @@ void removeInitOrAutoCopyPostResolution(CallExpr *call) {
     INT_ASSERT(lhs);
 
     if (!isShadowVarSymbol(lhs)) {
-      Expr *anchor = nextExpr;
-      setDefinedConstForDomainSymbol(lhs, nextExpr, anchor, isConst);
+      setDefinedConstForDomainSymbol(lhs, nextExpr, isConst);
 
       if (createdNoop) {
         nextExpr->remove();
@@ -225,26 +225,48 @@ static VarSymbol *addFieldAccess(Symbol *receiver, const char *fieldName,
   return fieldRef;
 }
 
-static void setDefinedConstForDomainSymbol(Symbol *domainSym, Expr *nextExpr,
-                                           Expr *anchor, Symbol *isConst) {
+static void setDefinedConstForDomainSymbol(Symbol *domainSym,
+                                           Expr *insBeforeMarker,
+                                           Expr *&insAfterMarker,
+                                           Symbol *isConst) {
+
   VarSymbol *domInstance = addFieldAccess(domainSym, "_instance",
-                                          nextExpr, anchor, /*asRef=*/ true);
+                                          insBeforeMarker, insAfterMarker,
+                                          /*asRef=*/ true);
 
   VarSymbol *refToDefinedConst = addFieldAccess(domInstance, "definedConst",
-                                                nextExpr, anchor,
-                                                true);
+                                                insBeforeMarker, insAfterMarker,
+                                                /*asRef=*/ true);
 
   CallExpr *setDefinedConst = new CallExpr(PRIM_MOVE, refToDefinedConst,
                                            isConst);
 
-  anchor->insertAfter(setDefinedConst);
+  insAfterMarker->insertAfter(setDefinedConst);
+  insAfterMarker = insAfterMarker->next;
+}
+
+void setDefinedConstForDomainSymbol(Symbol *domainSym, Expr *nextExpr,
+                                    Symbol *isConst) {
+  CallExpr *noop = new CallExpr(PRIM_NOOP);
+  nextExpr->insertBefore(noop);
+
+  Expr *insBeforeMarker = noop;
+  Expr *insAfterMarker = noop;
+
+  setDefinedConstForDomainSymbol(domainSym, insBeforeMarker, insAfterMarker,
+                                 isConst);
+
+  noop->remove();
 }
 
 static void setDefinedConstForDomainField(Symbol *thisSym, Symbol *fieldSym,
                                           Expr *nextExpr, Symbol *isConst) {
-    Expr *anchor = nextExpr;
+    Expr *insBeforeMarker = nextExpr;
+    Expr *insAfterMarker = nextExpr;
     VarSymbol *domSym = addFieldAccess(thisSym, fieldSym->name,
-                                       nextExpr, anchor, /*asRef=*/false);
-    setDefinedConstForDomainSymbol(domSym, nextExpr, anchor, isConst);
+                                       insBeforeMarker, insAfterMarker,
+                                       /* asRef = */false);
+    setDefinedConstForDomainSymbol(domSym, insBeforeMarker, insAfterMarker,
+                                   isConst);
 }
 

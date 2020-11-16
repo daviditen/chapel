@@ -46,6 +46,8 @@ module ChapelSyncvar {
   use MemConsistency;
   use SyncVarRuntimeSupport;
 
+  use CPtr;
+
   /************************************ | *************************************
   *                                                                           *
   * The implementation of the user-facing sync/single types are exposed to    *
@@ -918,6 +920,7 @@ module ChapelSyncvar {
 private module SyncVarRuntimeSupport {
   use ChapelStandard, SysCTypes;
   use AlignedTSupport;
+  use CPtr;
 
   //
   // Sync var externs

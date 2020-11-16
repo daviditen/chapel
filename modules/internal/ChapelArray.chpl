@@ -170,6 +170,7 @@ module ChapelArray {
   import Reflection;
   use ChapelDebugPrint;
   use SysCTypes;
+  use ChapelPrivatization;
 
   // Explicitly use a processor atomic, as most calls to this function are
   // likely be on locale 0
@@ -186,6 +187,12 @@ module ChapelArray {
   config param useBulkTransferStride = true;
   pragma "no doc"
   config param useBulkPtrTransfer = useBulkTransfer;
+
+  pragma "no doc"
+  config param disableConstDomainOpt = false;
+
+  pragma "no doc"
+  config param debugOptimizedSwap = false;
 
   // Return POD values from arrays as values instead of const ref?
   pragma "no doc"
@@ -1762,12 +1769,6 @@ module ChapelArray {
 
     /* Return the number of indices in this domain */
     proc size return _value.dsiNumIndices;
-    /* Deprecated - please use :proc:`size`. */
-    proc numIndices {
-      compilerWarning("'domain.numIndices' is deprecated - " +
-                      "please use 'domain.size' instead");
-      return size;
-    }
     /* Return the lowest index in this domain */
     proc low return _value.dsiLow;
     /* Return the highest index in this domain */
@@ -2962,12 +2963,6 @@ module ChapelArray {
       }
     }
 
-    /* Deprecated - please use :proc:`size`. */
-    proc numElements {
-      compilerWarning("'array.numElements' is deprecated - " +
-                      "please use 'array.size' instead");
-      return size;
-    }
     /* Return the number of elements in the array */
     proc size return _value.dom.dsiNumIndices;
 
@@ -3705,7 +3700,7 @@ module ChapelArray {
   proc =(ref a: _distribution, b: _distribution) {
     if a._value == nil {
       __primitive("move", a, chpl__autoCopy(b.clone(), definedConst=false));
-    } else if a._value._doms.size == 0 {
+    } else if a._value._doms_containing_dist == 0 {
       if a._value.type != b._value.type then
         compilerError("type mismatch in distribution assignment");
       if a._value == b._value {
@@ -3850,14 +3845,15 @@ module ChapelArray {
   proc chpl__supportedDataTypeForBulkTransfer(x) param return true;
 
   pragma "no doc"
-  proc checkArrayShapesUponAssignment(a: [], b: []) {
+  proc checkArrayShapesUponAssignment(a: [], b: [], forSwap = false) {
     if isRectangularArr(a) && isRectangularArr(b) {
       const aDims = a._value.dom.dsiDims(),
             bDims = b._value.dom.dsiDims();
       compilerAssert(aDims.size == bDims.size);
       for param i in 0..aDims.size-1 {
         if aDims(i).size != bDims(i).size then
-          halt("assigning between arrays of different shapes in dimension ",
+          halt(if forSwap then "swapping" else "assigning",
+               " between arrays of different shapes in dimension ",
                i, ": ", aDims(i).size, " vs. ", bDims(i).size);
       }
     } else {
@@ -4413,11 +4409,24 @@ module ChapelArray {
   // Swap operator for arrays
   //
   inline proc <=>(x: [?xD], y: [?yD]) {
+    if x.rank != y.rank then
+      compilerError("rank mismatch in array swap");
+
+    if boundsChecking then
+      checkArrayShapesUponAssignment(x, y, forSwap=true);
+
     var hasSwapped: bool = false;
-    // Check if array can use optimized pointer swap
-    if Reflection.canResolveMethod(x._value, "doiOptimizedSwap", y._value) {
-      hasSwapped = x._value.doiOptimizedSwap(y._value);
+
+    // we don't want to do anything optimized for arrays with different element
+    // types, if their eltTypes can coerce to one another let the forall handle
+    // it
+    if x.eltType == y.eltType {
+      // Check if array can use optimized pointer swap
+      if Reflection.canResolveMethod(x._value, "doiOptimizedSwap", y._value) {
+        hasSwapped = x._value.doiOptimizedSwap(y._value);
+      }
     }
+
     if !hasSwapped {
       forall (a,b) in zip(x, y) do
         a <=> b;
@@ -5264,7 +5273,31 @@ module ChapelArray {
       pragma "no copy"
       var A = D.buildArrayWith(elemType, data, size:int);
 
+      // in lieu of automatic memory management for runtime types
+      __primitive("auto destroy runtime type", elemType);
+
       return A;
     }
+  }
+
+  // used for passing arrays to extern procs, e.g.
+  //   extern proc foo(X: []);
+  //   var A: [1..3] real;
+  //   foo(A);
+  // 'castToVoidStar' says whether we should cast the result to c_void_ptr
+  pragma "no doc"
+  proc chpl_arrayToPtr(arr: [], param castToVoidStar: bool = false) {
+    if (!isRectangularArr(arr) || !arr.domain.dist._value.dsiIsLayout()) then
+      compilerError("Only single-locale rectangular arrays can be passed to an external routine argument with array type", errorDepth=2);
+
+    if (arr._value.locale != here) then
+      halt("An array can only be passed to an external routine from the locale on which it lives (array is on locale " + arr._value.locale.id:string + ", call was made on locale " + here.id:string + ")");
+    
+    use CPtr;
+    const ptr = c_pointer_return(arr[arr.domain.alignedLow]);
+    if castToVoidStar then
+      return ptr: c_void_ptr;
+    else
+      return ptr;
   }
 }

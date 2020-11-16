@@ -53,9 +53,9 @@ within strings.
 Casts from String to a Numeric Type
 -----------------------------------
 
-This module supports casts from :mod:`string <String>` to numeric types. Such
-casts will convert the string to the numeric type and throw an error if the
-string is invalid. For example:
+The :mod:`string <String>` type supports casting to numeric types. Such casts
+will convert the string to the numeric type and throw an error if the string is
+invalid. For example:
 
 .. code-block:: chapel
 
@@ -140,7 +140,7 @@ bytes:
 .. note::
 
   The standard :mod:`FileSystem`, :mod:`Path` and :mod:`IO` modules can use
-  strings described above for paths and file names.
+  escaped strings as described above for paths and file names.
 
 
 Lengths and Offsets in Unicode Strings
@@ -159,20 +159,53 @@ and `int` values passed into :proc:`~string.this` are offsets in codepoint
 units.
 
 It is possible to indicate byte or codepoint units for indexing in the
-string methods by using arguments of type :record:`byteIndex` or
-:record:`codepointIndex` respectively.
+string methods by using arguments of type ``byteIndex`` or
+``codepointIndex`` respectively.
 
 For speed of indexing with their result values, :proc:`~string.find()`
-and :proc:`~string.rfind()` return a :record:`byteIndex`.
+and :proc:`~string.rfind()` return a ``byteIndex``.
 
 .. note::
 
   Support for grapheme units is not implemented at this time.
 
+Using the ``byteIndex`` and ``codepointIndex`` types
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A value of type ``byteIndex`` or ``codepointIndex`` can be passed to certain
+``string`` functions to indicate that the function should operate with units of
+bytes or codepoints. Passing a ``codepointIndex`` has the same behavior as
+passing an integral type. See :proc:`~string.this` for an example.
+
+Both of these types can be created from an ``int`` via assignment or cast. They
+also support addition and subtraction with ``int``. Finally, values of same
+types can be compared.
+
+For example, the following function returns a string containing only the second
+byte of the argument:
+
+   .. code-block:: chapel
+
+     proc getSecondByte(arg:string) {
+       var offsetInBytes = 1:byteIndex;
+       return arg[offsetInBytes];
+     }
+
+Whereas the following function returns a string containing only the second
+codepoint of the argument:
+
+   .. code-block:: chapel
+
+     proc getSecondCodepoint(arg:string) {
+       var offsetInCodepoints = 1:codepointIndex;
+       return arg[offsetInCodepoints];
+     }
+
+
  */
 module String {
   use ChapelStandard;
-  use SysCTypes;
+  use SysCTypes, CPtr;
   use ByteBufferHelpers;
   use BytesStringCommon;
   use SysBasic;
@@ -225,35 +258,12 @@ module String {
     var cachedNumCodepoints: int;
   }
 
-  /*
-     A value of type :record:`byteIndex` can be passed to certain
-     `string` functions to indicate that the function should operate
-     with units of bytes. See :proc:`~string.this`.
-
-     An `int` can be added to a :record:`byteIndex`, producing
-     another :record:`byteIndex`.  One :record:`byteIndex`
-     can be subtracted from another, producing an `int` distance
-     between them.  A :record:`byteIndex` can also be compared
-     with another :record:`byteIndex` or with an `int` .
-
-     To create or modify a :record:`byteIndex`, cast or assign it from an
-     `int`. For example, the following function returns a string
-     containing only the second byte of the argument:
-
-     .. code-block:: chapel
-
-       proc getSecondByte(arg:string) : int {
-         var offsetInBytes = 2:byteIndex;
-         return arg[offsetInBytes];
-       }
-
-   */
   pragma "plain old data"
+  pragma "no doc"
   record byteIndex {
     pragma "no doc"
     var _bindex  : int;
 
-    pragma "no doc"
     proc init() {
       // Let compiler insert defaults
     }
@@ -266,30 +276,8 @@ module String {
     }
   }
 
-  /*
-     A value of type :record:`codepointIndex` can be passed to certain
-     `string` functions to indicate that the function should operate
-     with units of codepoints. See :proc:`~string.this`.
-
-     An `int` can be added to a :record:`codepointIndex`, producing
-     another :record:`codepointIndex`.  One :record:`codepointIndex`
-     can be subtracted from another, producing an `int` distance
-     between them.  A :record:`codepointIndex` can also be compared
-     with another :record:`codepointIndex` or with an `int` .
-
-     To create or modify a :record:`codepointIndex`, cast or assign it from an
-     `int`. For example, the following function returns a string
-     containing only the second codepoint of the argument:
-
-     .. code-block:: chapel
-
-       proc getSecondCodepoint(arg:string) : int {
-         var offsetInCodepoints = 2:codepointIndex;
-         return arg[offsetInCodepoints];
-       }
-
-   */
   pragma "plain old data"
+  pragma "no doc"
   record codepointIndex {
     pragma "no doc"
     var _cpindex  : int;
@@ -454,16 +442,6 @@ module String {
     return numCodepoints;
   }
 
-  private proc stringFactoryArgDepr() {
-    compilerWarning("createStringWith* with formal argument `s` is deprecated. ",
-                    "Use argument name `x` instead");
-  }
-
-  private proc joinArgDepr() {
-    compilerWarning("string.join with formal argument `S` is deprecated. ",
-                    "Use argument name `x` instead");
-  }
-
   //
   // createString* functions
   //
@@ -484,13 +462,6 @@ module String {
     ret.cachedNumCodepoints = x.cachedNumCodepoints;
     initWithBorrowedBuffer(ret, x);
     return ret;
-  }
-
-  pragma "last resort"
-  pragma "no doc"
-  inline proc createStringWithBorrowedBuffer(s: string) {
-    stringFactoryArgDepr();
-    return createStringWithBorrowedBuffer(x=s);
   }
 
   /*
@@ -514,13 +485,6 @@ module String {
                                                             size=length+1);
   }
 
-  pragma "last resort"
-  pragma "no doc"
-  inline proc createStringWithBorrowedBuffer(s: c_string, length=s.size) throws {
-    stringFactoryArgDepr();
-    return createStringWithBorrowedBuffer(x=s, length);
-  }
-
   pragma "no doc"
   proc chpl_createStringWithLiteral(x: c_string, length: int, numCodepoints: int) {
     // NOTE: This is a "wellknown" function used by the compiler to create
@@ -533,12 +497,12 @@ module String {
   }
 
   /*
-     Creates a new string which borrows the memory allocated for a
-     `c_ptr(uint(8))`. If the buffer is freed before the string returned from
-     this function, accessing it is undefined behavior.
+     Creates a new string which borrows the memory allocated for a `c_ptr`. If
+     the buffer is freed before the string returned from this function,
+     accessing it is undefined behavior.
 
      :arg x: Object to borrow the buffer from
-     :type x: `bufferType` (i.e. `c_ptr(uint(8))`)
+     :type x: `c_ptr(uint(8))` or `c_ptr(c_char)`
 
      :arg length: Length of the string stored in `x` in bytes, excluding the
                   terminating null byte.
@@ -551,34 +515,21 @@ module String {
 
      :returns: A new `string`
   */
-  inline proc createStringWithBorrowedBuffer(x: bufferType,
+  inline proc createStringWithBorrowedBuffer(x: c_ptr(?t),
                                              length: int, size: int) throws {
+    if t != byteType && t != c_char {
+      compilerError("Cannot create a string with a buffer of ", t:string);
+    }
     var ret: string;
-    ret.cachedNumCodepoints = validateEncoding(x, length);
-    initWithBorrowedBuffer(ret, x, length,size);
+    ret.cachedNumCodepoints = validateEncoding(x:bufferType, length);
+    initWithBorrowedBuffer(ret, x:bufferType, length, size);
     return ret;
   }
-
-  pragma "last resort"
-  pragma "no doc"
-  inline proc createStringWithBorrowedBuffer(s: bufferType,
-                                             length: int, size: int) throws {
-    stringFactoryArgDepr();
-    return createStringWithBorrowedBuffer(x=s, length, size);
-  }
-
 
   pragma "no doc"
   inline proc createStringWithOwnedBuffer(x: string) {
     // should we allow stealing ownership?
     compilerError("A Chapel string cannot be passed to createStringWithOwnedBuffer");
-  }
-
-  pragma "last resort"
-  pragma "no doc"
-  inline proc createStringWithOwnedBuffer(s: string) {
-    stringFactoryArgDepr();
-    return createStringWithOwnedBuffer(x=s);
   }
 
   /*
@@ -601,19 +552,12 @@ module String {
                                                       size=length+1);
   }
 
-  pragma "last resort"
-  pragma "no doc"
-  inline proc createStringWithOwnedBuffer(s: c_string, length=s.size) throws {
-    stringFactoryArgDepr();
-    return createStringWithOwnedBuffer(x=s, length);
-  }
-
   /*
      Creates a new string which takes ownership of the memory allocated for a
-     `c_ptr(uint(8))`. The buffer will be freed when the string is deinitialized.
+     `c_ptr`. The buffer will be freed when the string is deinitialized.
 
      :arg x: Object to take ownership of the buffer from
-     :type x: `bufferType` (i.e. `c_ptr(uint(8))`)
+     :type x: `c_ptr(uint(8))` or `c_ptr(c_char)`
 
      :arg length: Length of the string stored in `x` in bytes, excluding the
                   terminating null byte.
@@ -626,20 +570,15 @@ module String {
 
      :returns: A new `string`
   */
-  inline proc createStringWithOwnedBuffer(x: bufferType,
+  inline proc createStringWithOwnedBuffer(x: c_ptr(?t),
                                           length: int, size: int) throws {
+    if t != byteType && t != c_char {
+      compilerError("Cannot create a string with a buffer of ", t:string);
+    }
     var ret: string;
-    ret.cachedNumCodepoints = validateEncoding(x, length);
-    initWithOwnedBuffer(ret, x, length, size);
+    ret.cachedNumCodepoints = validateEncoding(x:bufferType, length);
+    initWithOwnedBuffer(ret, x:bufferType, length, size);
     return ret;
-  }
-
-  pragma "last resort"
-  pragma "no doc"
-  inline proc createStringWithOwnedBuffer(s: bufferType,
-                                          length: int, size: int) throws {
-    stringFactoryArgDepr();
-    return createStringWithOwnedBuffer(x=s, length, size);
   }
 
   /*
@@ -656,13 +595,6 @@ module String {
     ret.cachedNumCodepoints = x.numCodepoints;
     initWithNewBuffer(ret, x);
     return ret;
-  }
-
-  pragma "last resort"
-  pragma "no doc"
-  inline proc createStringWithNewBuffer(s: string) {
-    stringFactoryArgDepr();
-    return createStringWithNewBuffer(x=s);
   }
 
   /*
@@ -693,19 +625,11 @@ module String {
                                      size=length+1, policy);
   }
 
-  pragma "last resort"
-  pragma "no doc"
-  inline proc createStringWithNewBuffer(s: c_string, length=s.size,
-                                        policy=decodePolicy.strict) throws {
-    stringFactoryArgDepr();
-    return createStringWithNewBuffer(x=s, length, policy);
-  }
-
   /*
      Creates a new string by creating a copy of a buffer.
 
      :arg x: The buffer to copy
-     :type x: `bufferType` (i.e. `c_ptr(uint(8))`)
+     :type x: `c_ptr(uint(8))` or `c_ptr(c_char)`
 
      :arg length: Length of the string stored in `x` in bytes, excluding the
                   terminating null byte.
@@ -725,22 +649,16 @@ module String {
 
      :returns: A new `string`
   */
-  inline proc createStringWithNewBuffer(x: bufferType,
+  inline proc createStringWithNewBuffer(x: c_ptr(?t),
                                         length: int, size=length+1,
                                         policy=decodePolicy.strict) throws {
+    if t != byteType && t != c_char {
+      compilerError("Cannot create a string with a buffer of ", t:string);
+    }
     // size argument is not used, because we're allocating our own buffer
     // anyways. But it has a default and probably it's good to keep it here for
     // interface consistency
-    return decodeByteBuffer(x, length, policy);
-  }
-
-  pragma "last resort"
-  pragma "no doc"
-  inline proc createStringWithNewBuffer(s: bufferType,
-                                        length: int, size=length+1,
-                                        policy=decodePolicy.strict) throws {
-    stringFactoryArgDepr();
-    return createStringWithNewBuffer(x=s, length, size, policy);
+    return decodeByteBuffer(x:bufferType, length, policy);
   }
 
   // non-validating string factory functions are in this submodule. This
@@ -1136,18 +1054,6 @@ module String {
       return ret;
     }
 
-    pragma "last resort"
-    inline proc join(const ref S) : string where isTuple(S) {
-      joinArgDepr();
-      return join(S);
-    }
-
-    pragma "last resort"
-    inline proc join(const ref S: [] string) : string {
-      joinArgDepr();
-      return join(S);
-    }
-
     inline proc join(ir: _iteratorRecord): string {
       return doJoinIterator(this, ir);
     }
@@ -1181,13 +1087,6 @@ module String {
 
   } // end record string
                                         
-  /* Deprecated - please use :proc:`string.size`. */
-  inline proc string.length {
-    compilerWarning("'string.length' is deprecated - " +
-                    "please use 'string.size' instead");
-    return numCodepoints;
-  }
-
   /*
     :returns: The number of codepoints in the string.
   */
@@ -2165,6 +2064,7 @@ module String {
   /*
      Copies the int `rhs` into the byteIndex `lhs`.
   */
+  pragma "no doc"
   proc =(ref lhs: byteIndex, rhs: int) {
     lhs._bindex = rhs: int;
   }
@@ -2176,6 +2076,7 @@ module String {
   /*
      Copies the int `rhs` into the codepointIndex `lhs`.
   */
+  pragma "no doc"
   proc =(ref lhs: codepointIndex, rhs: int) {
     lhs._cpindex = rhs: int;
   }
@@ -2294,13 +2195,6 @@ module String {
   pragma "no doc"
   inline proc param string.numCodepoints param
     return __primitive("string_length_codepoints", this);
-
-  pragma "no doc"
-  inline proc param string.length param {
-    compilerWarning("'string.length' is deprecated - " +
-                    "please use 'string.size' instead");
-    return this.numCodepoints;
-  }
 
   pragma "no doc"
   inline proc param string.size param

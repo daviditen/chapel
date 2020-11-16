@@ -29,7 +29,7 @@ module ChapelDistribution {
   //
   pragma "base dist"
   class BaseDist {
-    var _doms: chpl__simpleSet(unmanaged BaseDom); // domains declared over this distribution
+    var _doms_containing_dist: int; // number of domains using this distribution
     var _domsLock: chpl_LocalSpinlock; // lock for concurrent access
     var _free_when_no_doms: bool; // true when original _distribution is destroyed
     var pid:int = nullPid; // privatized ID, if privatization is supported
@@ -49,7 +49,7 @@ module ChapelDistribution {
             // Set a flag to indicate it should be freed when _doms
             // becomes empty
             _free_when_no_doms = true;
-            dom_count = _doms.size;
+            dom_count = _doms_containing_dist;
             _domsLock.unlock();
           }
           if dom_count == 0 then
@@ -73,8 +73,8 @@ module ChapelDistribution {
         var cnt = -1;
         local {
           _domsLock.lock();
-          _doms.remove(x);
-          cnt = _doms.size;
+          _doms_containing_dist -= 1;
+          cnt = _doms_containing_dist;
 
           // add one for the main distribution instance
           if !_free_when_no_doms then
@@ -102,7 +102,7 @@ module ChapelDistribution {
     inline proc add_dom(x:unmanaged BaseDom) {
       on this {
         _domsLock.lock();
-        _doms.add(x);
+        _doms_containing_dist += 1 ;
         _domsLock.unlock();
       }
     }
@@ -171,6 +171,10 @@ module ChapelDistribution {
       return ret;
     }
 
+    inline proc trackArrays() {
+      return disableConstDomainOpt || !this.definedConst;
+    }
+
     // Returns (dom, dist).
     // if this domain should be deleted, dom=this; otherwise it is nil.
     // dist is nil or a distribution that should be removed.
@@ -191,8 +195,7 @@ module ChapelDistribution {
         // and mark this domain to free itself when that number reaches 0.
         local {
           _arrsLock.lock();
-          arr_count = _arrs.size;
-          arr_count += _arrs_containing_dom;
+          arr_count = _arrs_containing_dom;
           _free_when_no_arrs = true;
           _arrsLock.unlock();
         }
@@ -224,12 +227,10 @@ module ChapelDistribution {
         var cnt = -1;
         local {
           _arrsLock.lock();
-          if rmFromList && !this.definedConst then
+          _arrs_containing_dom -=1;
+          if rmFromList && trackArrays() then
             _arrs.remove(x);
-          else
-            _arrs_containing_dom -=1;
-          cnt = _arrs.size;
-          cnt += _arrs_containing_dom;
+          cnt = _arrs_containing_dom;
           // add one for the main domain record
           if !_free_when_no_arrs then
             cnt += 1;
@@ -249,10 +250,9 @@ module ChapelDistribution {
       on this {
         if locking then
           _arrsLock.lock();
-        if addToList && !this.definedConst then
+        _arrs_containing_dom += 1;
+        if addToList && trackArrays() then
           _arrs.add(x);
-        else
-          _arrs_containing_dom += 1;
         if locking then
           _arrsLock.unlock();
       }
@@ -265,8 +265,7 @@ module ChapelDistribution {
         var cnt = -1;
         _arrsLock.lock();
         _arrs_containing_dom -= 1;
-        cnt = _arrs.size;
-        cnt += _arrs_containing_dom;
+        cnt = _arrs_containing_dom;
         // add one for the main domain record
         if !_free_when_no_arrs then
           cnt += 1;
@@ -595,6 +594,18 @@ module ChapelDistribution {
         if !(parentDom.contains(ind)) then
           halt("Sparse domain/array index out of bounds: ", ind,
               " (expected to be within ", parentDom, ")");
+    }
+
+    proc canDoDirectAssignment(rhs: domain) {
+      if isRectangularDom(this.parentDom) &&
+         isRectangularDom(rhs.parentDom) {
+        if this.dsiNumIndices == 0 {
+          if rhs.parentDom.isSubset(this.parentDom) {
+            return true;
+          }
+        }
+      }
+      return false;
     }
 
     //basic DSI functions

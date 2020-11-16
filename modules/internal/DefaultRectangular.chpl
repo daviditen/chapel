@@ -30,7 +30,7 @@ module DefaultRectangular {
 
   use DSIUtil;
   public use ChapelArray;
-  use ChapelDistribution, ChapelRange, SysBasic, SysError, SysCTypes;
+  use ChapelDistribution, ChapelRange, SysBasic, SysError, SysCTypes, CPtr;
   use ChapelDebugPrint, ChapelLocks, OwnedObject, IO;
   use DefaultSparse, DefaultAssociative;
   public use ExternalArray; // OK: currently expected to be available by
@@ -42,6 +42,10 @@ module DefaultRectangular {
   config param debugDataParNuma = false;
   config param disableArrRealloc = false;
   config param reportInPlaceRealloc = false;
+
+  config param parallelAssignThreshold = 2*1024*1024;
+  config param enableParallelGetsInAssignment = false;
+  config param enableParallelPutsInAssignment = false;
 
   config param defaultDoRADOpt = true;
   config param defaultDisableLazyRADOpt = false;
@@ -150,7 +154,7 @@ module DefaultRectangular {
     override proc linksDistribution() param return false;
     override proc dsiLinksDistribution()     return false;
 
-    proc type isDefaultRectangular() param return true;
+    override proc type isDefaultRectangular() param return true;
     override proc isDefaultRectangular() param return true;
 
     proc init(param rank, type idxType, param stridable, dist) {
@@ -1938,29 +1942,79 @@ module DefaultRectangular {
 
     const Aidx = A.getDataIndex(Alo);
     const Adata = _ddata_shift(A.eltType, A.theData, Aidx);
+    const Alocid = Adata.locale.id;
     const Bidx = B.getDataIndex(Blo);
     const Bdata = _ddata_shift(B.eltType, B.theData, Bidx);
-    _simpleTransferHelper(A, B, Adata, Bdata, len);
+    const Blocid = Bdata.locale.id;
+
+    type t = A.eltType;
+    const elemsizeInBytes = if isNumericType(t) then numBytes(t)
+                            else c_sizeof(t).safeCast(int);
+
+    // we parallelize the assignment if
+    // 1. the size is above threshold
+    // 2. we are either not doing communication or doing a PUT
+    // See: https://github.com/Cray/chapel-private/issues/1365
+    const isSizeAboveThreshold = len:int*elemsizeInBytes >= parallelAssignThreshold;
+    const isFullyLocal = Alocid == Blocid;
+    var doParallelAssign = isSizeAboveThreshold && isFullyLocal;
+
+    if enableParallelGetsInAssignment || enableParallelPutsInAssignment {
+      if isSizeAboveThreshold && !isFullyLocal {
+        if enableParallelPutsInAssignment && Blocid == here.id {
+          doParallelAssign = true;
+        }
+        else if enableParallelGetsInAssignment && Blocid != here.id {
+          doParallelAssign = true;
+        }
+      }
+    }
+
+    if doParallelAssign {
+      _simpleParallelTransferHelper(A, B, Adata, Bdata, Alocid, Blocid, len);
+    }
+    else{
+      _simpleTransferHelper(A, B, Adata, Bdata, Alocid, Blocid, len);
+    }
   }
 
-  private proc _simpleTransferHelper(A, B, Adata, Bdata, len) {
+  private proc _simpleParallelTransferHelper(A, B, Adata, Bdata, Alocid, Blocid, len) {
+    const numTasks = if __primitive("task_get_serial") then 1
+                        else _computeNumChunks(len);
+    const lenPerTask = len:int/numTasks;
+
+    if debugDefaultDistBulkTransfer && numTasks > 1 then
+      chpl_debug_writeln("\tWill do parallel transfer with ", numTasks, " tasks");
+
+    coforall tid in 0..#numTasks {
+      const myOffset = tid*lenPerTask;
+      const myLen = if tid == numTasks-1 then len:int-myOffset else lenPerTask;
+
+      _simpleTransferHelper(A, B, Adata, Bdata, Alocid, Blocid, myLen, myOffset);
+    }
+  }
+
+  private proc _simpleTransferHelper(A, B, Adata, Bdata, Alocid, Blocid, len, offset=0) {
     if Adata == Bdata then return;
 
     // NOTE: This does not work with --heterogeneous, but heterogeneous
     // compilation does not work right now.  The calls to chpl_comm_get
     // and chpl_comm_put should be changed once that is fixed.
-    if Adata.locale.id==here.id {
+    if Alocid==here.id {
       if debugDefaultDistBulkTransfer then
-        chpl_debug_writeln("\tlocal get() from ", B.locale.id);
-      __primitive("chpl_comm_array_get", Adata[0], Bdata.locale.id, Bdata[0], len);
-    } else if Bdata.locale.id==here.id {
+        chpl_debug_writeln("\tlocal get() from ", Blocid);
+      __primitive("chpl_comm_array_get", Adata[offset], Blocid,
+                  Bdata[offset], len);
+    } else if Blocid==here.id {
       if debugDefaultDistBulkTransfer then
-        chpl_debug_writeln("\tlocal put() to ", A.locale.id);
-      __primitive("chpl_comm_array_put", Bdata[0], Adata.locale.id, Adata[0], len);
+        chpl_debug_writeln("\tlocal put() to ", Alocid);
+      __primitive("chpl_comm_array_put", Bdata[offset], Alocid,
+                  Adata[offset], len);
     } else on Adata.locale {
       if debugDefaultDistBulkTransfer then
-        chpl_debug_writeln("\tremote get() on ", here.id, " from ", B.locale.id);
-      __primitive("chpl_comm_array_get", Adata[0], Bdata.locale.id, Bdata[0], len);
+        chpl_debug_writeln("\tremote get() on ", here.id, " from ", Blocid);
+      __primitive("chpl_comm_array_get", Adata[offset], Blocid,
+                  Bdata[offset], len);
     }
   }
 
@@ -2213,7 +2267,7 @@ module DefaultRectangular {
   // A helper routine that will perform a pointer swap on an array
   // instead of doing a deep copy of that array. Returns true
   // if used the optimized swap, false otherwise
-  proc DefaultRectangularArr.doiOptimizedSwap(other) {
+  proc DefaultRectangularArr.doiOptimizedSwap(other: this.type) {
    // Get shape of array
     var size1: rank*(this.dom.ranges(0).intIdxType);
     for (i, r) in zip(0..#this.dom.ranges.size, this.dom.ranges) do
@@ -2226,11 +2280,29 @@ module DefaultRectangular {
     
     if(this.locale == other.locale &&
        size1 == size2) {
+      if debugOptimizedSwap {
+        writeln("DefaultRectangular doing optimized swap. Domains: ", 
+                this.dom.ranges, " ", other.dom.ranges);
+      }
       this.data <=> other.data;
       this.initShiftedData();
       other.initShiftedData();
       return true;
     }
+    if debugOptimizedSwap {
+      writeln("DefaultRectangular doing unoptimized swap. Domains: ", 
+              this.dom.ranges, " ", other.dom.ranges);
+    }
+    return false;
+  }
+
+  // The purpose of this overload is to provide debugging output in the event
+  // that debugOptimizedSwap is on and the main routine doesn't resolve (e.g.,
+  // due to a type, stridability, or rank mismatch in the other argument). When
+  // debugOptimizedSwap is off, this overload will be ignored due to its where
+  // clause.
+  proc DefaultRectangularArr.doiOptimizedSwap(other) where debugOptimizedSwap {
+    writeln("DefaultRectangularArr doing unoptimized swap. Type mismatch");
     return false;
   }
 

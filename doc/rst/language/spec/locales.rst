@@ -1,3 +1,5 @@
+.. default-domain:: chpl
+
 .. _Chapter-Locales_Chapter:
 
 Locales
@@ -172,7 +174,7 @@ program. It refers to the locale that the current task is running on.
 
 The identifier ``here`` is not a keyword and can be overridden.
 
-.. _Querying_the_Locale_of_a_Variable:
+.. _Querying_the_Locale_of_an_Expression:
 
 Querying the Locale of an Expression
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -182,8 +184,8 @@ stored) is queried using the following syntax:
 
 .. code-block:: syntax
 
-   locale-access-expression:
-     expression . `locale'
+   locale-query-expression:
+     expression . 'locale'
 
 When the expression is a class, the access returns the locale on which
 the class object exists rather than the reference to the class. If the
@@ -264,11 +266,11 @@ given by
 .. code-block:: syntax
 
    on-statement:
-     `on' expression `do' statement
-     `on' expression block-statement
+     'on' expression 'do' statement
+     'on' expression block-statement
 
 The locale of the expression is automatically queried as described
-in :ref:`Querying_the_Locale_of_a_Variable`. Execution of the
+in :ref:`Querying_the_Locale_of_an_Expression`. Execution of the
 statement occurs on this specified locale and then continues after the
 ``on-statement``.
 
@@ -291,4 +293,4 @@ keyword and braces. The syntax is given by:
 .. code-block:: syntax
 
    remote-variable-declaration-statement:
-     `on' expression variable-declaration-statement
+     'on' expression variable-declaration-statement

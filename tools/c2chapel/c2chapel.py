@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 #
 # Copyright 2020 Hewlett Packard Enterprise Development LP
@@ -576,6 +576,10 @@ def preamble(args, fakes):
     if len(fakes) != 0:
         genComment("Note: Generated with fake std headers")
         print()
+
+    # Arguably we can tighten the use of this module based on what we actually
+    # generate, but for now this is good enough
+    print("use CPtr;")
 
 # TODO: accept file from stdin?
 if __name__=="__main__":

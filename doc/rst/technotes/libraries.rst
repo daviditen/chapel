@@ -1,8 +1,8 @@
 .. _readme-libraries:
 
-=============================
-Exporting Chapel as a Library
-=============================
+========================================
+Calling Chapel Code from Other Languages
+========================================
 
 .. note::
 
@@ -818,6 +818,12 @@ tracking down issues with an exported function's body.
 
 Caveats
 =======
+
+Supported Types for export procs
+--------------------------------
+
+See :ref:`readme-extern-declarations-limitations` for details of what
+intents and types are allowed.
 
 Multiple Chapel Libraries
 -------------------------

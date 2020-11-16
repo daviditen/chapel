@@ -1,3 +1,5 @@
+.. default-domain:: chpl
+
 .. _Chapter-Variables:
 
 Variables
@@ -21,14 +23,14 @@ Variables are declared with the following syntax:
      privacy-specifier[OPT] config-extern-or-export[OPT] variable-kind variable-declaration-list ;
 
    config-or-extern: one of
-     `config' `extern' `export'
+     'config' 'extern' 'export'
 
    variable-kind:
-     `param'
-     `const'
-     `var'
-     `ref'
-     `const ref'
+     'param'
+     'const'
+     'var'
+     'ref'
+     'const ref'
 
    variable-declaration-list:
      variable-declaration
@@ -628,6 +630,39 @@ Parameter constants and expressions cannot be aliased.
       refToExpr = 62
       myArr[3] = 73
       myConstRef = 52
+
+.. _Variable_Conflicts:
+
+Variable Conflicts
+------------------
+
+If multiple variables defined in the same scope share a name, then a compilation
+error will occur when that name is used.
+
+An error will not occur if the would-be conflicting symbols are defined within
+different scopes contained by the same outer scope.  For example, the following
+code will not encounter a conflict when writing the symbol x:
+
+   *Example (conflict1.chpl)*.
+
+   .. code-block:: chapel
+
+      var x: int;
+      writeln(x);
+      {
+        var x = 3; // Does not conflict with the earlier `x`
+        writeln(x);
+      }
+
+   .. BLOCK-test-chapeloutput
+
+      0
+      3
+
+A variable will also conflict with other symbols defined in the same scope that
+share a name with it.  While functions may share the same name (see
+:ref:`Function_Overloading`), a function sharing a name with a variable in the
+same scope will lead to conflicts.
 
 .. _Variable_Lifetimes:
 

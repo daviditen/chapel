@@ -1,3 +1,5 @@
+.. default-domain:: chpl
+
 .. _Chapter-Ranges:
 
 Ranges
@@ -212,7 +214,7 @@ A range type has the following syntax:
 .. code-block:: syntax
 
    range-type:
-     `range' ( named-expression-list )
+     'range' ( named-expression-list )
 
 That is, a range type is obtained as if by invoking the range type
 constructor (:ref:`Type_Constructors`) that has the following
@@ -560,7 +562,7 @@ The syntax of the ``by`` operator is:
 .. code-block:: syntax
 
    strided-range-expression:
-     range-expression `by' step-expression
+     range-expression 'by' step-expression
 
    step-expression:
      expression
@@ -649,7 +651,7 @@ The syntax for the ``align`` operator is:
 .. code-block:: syntax
 
    aligned-range-expression:
-     range-expression `align' expression
+     range-expression 'align' expression
 
 The type of the resulting range expression is the same as that of the
 range appearing as the left operand, but with the ``stridable``
@@ -1151,15 +1153,15 @@ Other Queries
 
 
 
-.. function:: proc range.member(i: idxType): bool
+.. function:: proc range.contains(i: idxType): bool
 
    Returns ``true`` if the range’s represented sequence contains ``i``,
-   ``false`` otherwise. It is an error to invoke ``member`` if the
+   ``false`` otherwise. It is an error to invoke ``contains`` if the
    represented sequence is not defined.
 
 
 
-.. function:: proc range.member(other: range): bool
+.. function:: proc range.contains(other: range): bool
 
    Reports whether ``other`` is a subrange of the receiver. That is, if the
    represented sequences of the receiver and ``other`` are defined and the

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 from distutils.spawn import find_executable
 import sys
 
@@ -13,7 +13,7 @@ def get():
         comm_val = chpl_comm.get()
         platform_val = chpl_platform.get('target')
 
-        if platform_val.startswith('cray-'):
+        if platform_val.startswith('cray-') or platform_val.startswith('hpe-cray-'):
             has_aprun = find_executable('aprun')
             has_slurm = find_executable('srun')
             if has_aprun and has_slurm:

@@ -28,9 +28,10 @@
   * Querying the top element is O(1).
   * Initialization from an array is O(N).
 
-  The heap accepts a comparator to determine how elements are compared. The default 
-  comparator is `defaultComparator` and makes a max-heap. In this case, ``top`` 
-  will return the greatest element in the heap.
+  The heap accepts a :ref:`comparator <comparators>` to determine how
+  elements are compared. The default comparator is `defaultComparator` and makes
+  a max-heap. In this case, ``top`` will return the greatest element in the
+  heap.
 
   If a ``reverseComparator`` is passed to ``init``, 
   ``top`` will return the minimal element.
@@ -336,7 +337,7 @@ module Heap {
     }
 
     /*
-      Iterate over the elements of this heap in in arbitrary order.
+      Iterate over the elements of this heap in an arbitrary order.
     */
     iter these() ref {
       for e in _data {
@@ -406,7 +407,7 @@ module Heap {
 
     :rtype: heap(t, comparator)
   */
-  proc createHeap(const ref x: list(?t), parSafe: bool = false, comparator = defaultComparator) {
+  proc createHeap(const ref x: list(?t), param parSafe: bool = false, comparator = defaultComparator) {
     var h = new heap(t, parSafe, comparator);
     h._commonInitFromIterable(x);
     return h;
